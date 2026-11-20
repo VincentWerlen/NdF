@@ -137,6 +137,8 @@ a.btn{text-decoration:none;color:inherit}
 .photo img{max-height:46vh;width:auto;max-width:100%;object-fit:contain;cursor:zoom-in}
 .photo.big{max-height:none}.photo.big img{max-height:none;cursor:zoom-out}
 .status{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--muted)}
+#ed-ocr summary{cursor:pointer;color:var(--accent-strong);font-weight:600;font-size:13.5px;padding-block:4px}
+#ed-ocr pre{white-space:pre-wrap;word-break:break-word;font-family:var(--f-num);font-size:12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px;max-height:40vh;overflow:auto;margin:6px 0 0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;z-index:30;max-width:min(90vw,480px)}
 @media (max-width:380px){.grid2{grid-template-columns:1fr}}
 </style>
@@ -305,6 +307,9 @@ a.btn{text-decoration:none;color:inherit}
   <div class="wrap panel" style="padding-bottom:40px">
     <div class="photo" id="ed-photo" hidden><img id="ed-img" alt="Photo du ticket"></div>
     <div class="status" id="ed-status" hidden></div>
+    <details id="ed-ocr" hidden><summary>Texte lu sur le ticket</summary>
+      <p class="hint">Ce que la lecture du téléphone a déchiffré. Si un champ est faux, ce texte aide à comprendre pourquoi.</p>
+      <pre id="ed-ocr-t"></pre></details>
     <div class="btns" id="ed-photo-btns">
       <button class="btn" id="ed-shot">Photo du ticket</button>
       <button class="btn" id="ed-pick">Depuis la galerie</button>
@@ -338,7 +343,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.4.0';
+const APP_VERSION='1.5.0';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
@@ -631,7 +636,7 @@ async function onPhoto(input){
   if(thumbs.get(l.id))URL.revokeObjectURL(thumbs.get(l.id));thumbs.set(l.id,URL.createObjectURL(ph.blob));
   l.photo=true;l.w=ph.w;l.h=ph.h;l.status='analyse';ensureJustif(l);await dbPut('lines',l);
   if(!edId||edId!==l.id)openEditor(l.id);else fillEditor(l);
-  render();analyse(l.id,ph.blob);
+  render();analyse(l.id,ph.blob,{orig:f});   // la lecture du téléphone part de la photo d'origine (pleine résolution)
 }
 
 /* ---------- lecture des tickets ----------
@@ -755,7 +760,8 @@ async function readWithMistral(blob){
    Sinon les deux restent vides et l'écran du ticket le signale : mieux vaut vide que faux. */
 const RATES=[20,10,5.5,2.1];
 const r2=x=>Math.round(x*100)/100;
-const near=(a,b,base)=>Math.abs(a-b)<=0.011+0.0025*Math.abs(base);
+// tolérance d'arrondi : 1 centime + 0,06 % de la base (cumul d'arrondis ligne à ligne) ; plus large, des chiffres mal lus passaient
+const near=(a,b,base)=>Math.abs(a-b)<=0.011+0.0006*Math.abs(base);
 function vatRow(rate,nums,tvaHint){
   // rate en %, nums = montants de la ligne (hors taux) ; renvoie {taux,base,tva} ou null si rien de cohérent
   if(!RATES.includes(rate)){const g=RATES.find(R=>rate!=null&&Math.abs(R-rate)<0.06);if(g==null){
@@ -769,19 +775,30 @@ function vatRow(rate,nums,tvaHint){
   if(ns.length===1&&tvaHint!=null&&near(ns[0],tvaHint,1))return {taux:rate,base:null,tva:ns[0]};  // taxe seule
   return null;
 }
-function resolveVat(ttc,{rows=[],totalHT=null,totalTVA=null}){
-  const tol=x=>Math.max(0.03,0.002*x);
+function resolveVat(ttc,{rows=[],totalHT=null,totalTVA=null,horsTvaCite=false}){
+  // HT + TVA = TTC au centime sur un ticket (arrondis cumulés : 0,02 % sur une grosse facture) ; plus large, un chiffre mal lu passait
+  const tol=x=>Math.max(0.015,0.0002*x);
   const fits=(h,t)=>ttc!=null&&Math.abs(h+t-ttc)<=tol(ttc);
   const plausible=(h,t)=>h>0&&t>0&&t<h&&t/h>=0.019&&t/h<=0.2025;
   const atRate=(h,t)=>RATES.some(R=>near(t,h*R/100,h));
   const fmtRates=list=>[...new Set(list)].sort((a,b)=>a-b).map(x=>String(x).replace('.',',')+' %').join(' / ');
   const out=(ht,tva,taux,extra={})=>Object.assign({ht:r2(ht),tva:r2(tva),taux:taux||'',horsTva:ttc!=null&&ht+tva<ttc-tol(ttc)?r2(ttc-ht-tva):0,doute:false},extra);
   const had=rows.some(Boolean)||totalHT!=null||totalTVA!=null;
+  // une part hors TVA (taxe de séjour, consigne…) n'est admise que petite ou citée sur le ticket ;
+  // sinon c'est une ligne du tableau de TVA qui n'a pas été lue, et le couple serait faux
+  const resteOK=(h,t)=>ttc==null||fits(h,t)||(h+t<ttc&&ttc-h-t<=(horsTvaCite?0.3:0.1)*ttc);
+  // taux connus par le tableau : un seul → TVA ≈ HT × taux ; plusieurs → ratio entre le plus petit et le plus grand ;
+  // aucun → l'un des taux français. Un couple qui ne colle à aucun taux vient d'une erreur de lecture : il est refusé.
+  const known=[...new Set(rows.filter(Boolean).map(x=>x.taux))];
+  const rateOK=(h,t)=>{if(!(h>0&&t>0))return false;
+    if(known.length===1)return near(t,h*known[0]/100,h);
+    if(known.length>1){const r=t/h*100;return r>=Math.min(...known)-0.15&&r<=Math.max(...known)+0.15}
+    return atRate(h,t)};
   // 1. tableau de TVA complet et cohérent
   const full=rows.filter(x=>x&&x.base!=null);
   if(rows.length&&full.length===rows.length){ // une ligne incohérente (null) invalide le tableau : on passe aux totaux
     const ht=full.reduce((s,x)=>s+x.base,0),tva=full.reduce((s,x)=>s+x.tva,0);
-    if(ttc==null||fits(ht,tva)||ht+tva<ttc)return out(ht,tva,fmtRates(full.map(x=>x.taux)));
+    if(resteOK(ht,tva))return out(ht,tva,fmtRates(full.map(x=>x.taux)));
   }
   // 2. totaux imprimés (colonnes éventuellement inversées)
   let h=totalHT,t=totalTVA;
@@ -789,48 +806,180 @@ function resolveVat(ttc,{rows=[],totalHT=null,totalTVA=null}){
   if(h!=null&&t!=null&&t>h)[h,t]=[t,h];
   const rateOf=(ht,tva)=>{const R=RATES.find(R=>near(tva,ht*R/100,ht));return R!=null?fmtRates([R]):(rows.some(Boolean)?fmtRates(rows.filter(Boolean).map(x=>x.taux)):'plusieurs taux')};
   if(h!=null&&t!=null){
-    if(fits(h,t)&&plausible(h,t))return out(h,t,rateOf(h,t));
-    if(ttc!=null&&h+t<ttc&&atRate(h,t))return out(h,t,rateOf(h,t));
+    if(fits(h,t)&&plausible(h,t)&&rateOK(h,t))return out(h,t,rateOf(h,t));
+    if(ttc!=null&&h+t<ttc&&atRate(h,t)&&rateOK(h,t)&&resteOK(h,t))return out(h,t,rateOf(h,t));
   }
   if(ttc!=null){
-    if(t!=null&&plausible(ttc-t,t))return out(ttc-t,t,rateOf(ttc-t,t));
-    if(h!=null&&h<ttc&&plausible(h,ttc-h))return out(h,ttc-h,rateOf(h,ttc-h));
-    if(h!=null&&plausible(ttc-h,h))return out(ttc-h,h,rateOf(ttc-h,h),{corrige:true}); // « HT » lu était en fait la TVA
+    if(t!=null&&plausible(ttc-t,t)&&rateOK(ttc-t,t))return out(ttc-t,t,rateOf(ttc-t,t));
+    if(h!=null&&h<ttc&&plausible(h,ttc-h)&&rateOK(h,ttc-h))return out(h,ttc-h,rateOf(h,ttc-h));
+    if(h!=null&&plausible(ttc-h,h)&&rateOK(ttc-h,h))return out(ttc-h,h,rateOf(ttc-h,h),{corrige:true}); // « HT » lu était en fait la TVA
   }
   return {ht:null,tva:null,taux:'',horsTva:0,doute:had};
 }
 
-/* --- lecture locale (hors ligne) --- */
+/* --- lecture locale (hors ligne) ---
+   1. préparation de la photo : recadrage sur le papier (fond, table, doigts écartés), agrandissement,
+      niveaux de gris étirés et seuillage adaptatif (ombres, pliures) ;
+   2. Tesseract en mode « bloc uniforme » (PSM 6) sur l'image seuillée : le meilleur réglage mesuré sur le banc d'essai
+      (outils/tests/bench-ocr.js) ; le mode « colonne » (PSM 4) perdait les montants alignés à droite.
+      2e passe sur l'image en gris si la date, le total ou la TVA manquent ;
+   3. interprétation (parseReceipt) tolérante aux erreurs d'OCR, contrôles HT / TVA par resolveVat. */
 let tessWorkerP=null;
 function tessWorker(){
   if(!tessWorkerP)tessWorkerP=(async()=>{
     const base=new URL('vendor/tesseract/',location.href).href;
-    return Tesseract.createWorker('fra',1,{workerPath:base+'worker.min.js',corePath:base,langPath:base+'lang',gzip:true,workerBlobURL:false,cacheMethod:'none'});
+    const w=await Tesseract.createWorker('fra',1,{workerPath:base+'worker.min.js',corePath:base,langPath:base+'lang',gzip:true,workerBlobURL:false,cacheMethod:'none'});
+    await w.setParameters({preserve_interword_spaces:'1',user_defined_dpi:'300'});
+    return w;
   })().catch(e=>{tessWorkerP=null;throw e});
   return tessWorkerP;
 }
-const MOIS={janv:1,jan:1,fevr:2,fev:2,feb:2,mars:3,mar:3,avr:4,apr:4,mai:5,may:5,juin:6,jun:6,juil:7,jul:7,aout:8,aug:8,sept:9,sep:9,oct:10,nov:11,dec:12};
+async function toBitmap(blob){
+  try{return await createImageBitmap(blob,{imageOrientation:'from-image'})}catch(e){}
+  return await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('image illisible'));i.src=URL.createObjectURL(blob)});
+}
+function otsu(hist,total){
+  let sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sumB=0,wB=0,best=0,th=128;
+  for(let i=0;i<256;i++){wB+=hist[i];if(!wB)continue;const wF=total-wB;if(!wF)break;sumB+=i*hist[i];
+    const mB=sumB/wB,mF=(sum-sumB)/wF,v=wB*wF*(mB-mF)*(mB-mF);if(v>best){best=v;th=i}}
+  return th;
+}
+// zone du papier : pixels clairs et peu colorés, plus longue plage de lignes puis de colonnes qui en contiennent assez
+function paperBox(src){
+  const W=200,H=Math.max(1,Math.round(src.height*W/src.width));
+  const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(src,0,0,W,H);
+  const d=g.getImageData(0,0,W,H).data,lum=new Float32Array(W*H),sat=new Float32Array(W*H),hist=new Array(256).fill(0);
+  for(let i=0;i<W*H;i++){const r=d[4*i],gg=d[4*i+1],b=d[4*i+2];lum[i]=0.299*r+0.587*gg+0.114*b;sat[i]=Math.max(r,gg,b)-Math.min(r,gg,b);hist[lum[i]|0]++}
+  const T=Math.max(otsu(hist,W*H),110);
+  const paper=i=>lum[i]>T&&sat[i]<70;
+  const run=(fr,min)=>{let best=[0,-1],s=-1,gap=0;for(let k=0;k<fr.length;k++){if(fr[k]>=min){if(s<0)s=k;gap=0;if(k-s>best[1]-best[0])best=[s,k]}else if(s>=0&&++gap>2){s=-1;gap=0}}return best};
+  const rows=new Array(H).fill(0);for(let y=0;y<H;y++){let n=0;for(let x=0;x<W;x++)if(paper(y*W+x))n++;rows[y]=n/W}
+  const [y0,y1]=run(rows,0.18);if(y1<0)return null;
+  const cols=new Array(W).fill(0);for(let x=0;x<W;x++){let n=0;for(let y=y0;y<=y1;y++)if(paper(y*W+x))n++;cols[x]=n/(y1-y0+1)}
+  const [x0,x1]=run(cols,0.5);if(x1<0)return null;
+  const area=(x1-x0+1)*(y1-y0+1)/(W*H);if(area<0.08||area>0.97)return null;
+  const k=src.width/W,mx=0.02*W,my=0.02*H;
+  return {x:Math.max(0,(x0-mx)*k),y:Math.max(0,(y0-my)*k),w:Math.min(src.width,(x1-x0+1+2*mx)*k),h:Math.min(src.height,(y1-y0+1+2*my)*k)};
+}
+async function prepareReceipt(blob){
+  const src=await toBitmap(blob);
+  const box=paperBox(src)||{x:0,y:0,w:src.width,h:src.height};
+  // largeur de travail ~1400 px : texte de ticket assez grand pour l'OCR, sans exploser le temps de calcul
+  // (long ticket : on réduit l'échelle plutôt que de couper le bas, où se trouve le total)
+  const s=Math.min(3,1300/box.w,4000/box.h),W=Math.round(box.w*s),H=Math.round(box.h*s);
+  const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d',{willReadFrequently:true});
+  g.fillStyle='#fff';g.fillRect(0,0,W,H);g.drawImage(src,box.x,box.y,box.w,box.h,0,0,W,H);
+  const img=g.getImageData(0,0,W,H),d=img.data,N=W*H,gray=new Uint8ClampedArray(N),hist=new Array(256).fill(0);
+  for(let i=0;i<N;i++){const v=0.299*d[4*i]+0.587*d[4*i+1]+0.114*d[4*i+2];gray[i]=v;hist[v|0]++}
+  // étirement des niveaux (2 % - 98 %)
+  let lo=0,hi=255,acc=0;for(let i=0;i<256;i++){acc+=hist[i];if(acc>N*0.02){lo=i;break}}acc=0;for(let i=255;i>=0;i--){acc+=hist[i];if(acc>N*0.02){hi=i;break}}
+  const span=Math.max(30,hi-lo);for(let i=0;i<N;i++)gray[i]=Math.max(0,Math.min(255,(gray[i]-lo)*255/span));
+  // seuillage adaptatif (Bradley) sur image intégrale : fenêtre ~ 1/14 de la largeur
+  const I=new Uint32Array((W+1)*(H+1));   // entiers 32 bits : ~20 Mo au plus, supportable sur un téléphone
+  for(let y=1;y<=H;y++){let rs=0;for(let x=1;x<=W;x++){rs+=gray[(y-1)*W+x-1];I[y*(W+1)+x]=I[(y-1)*(W+1)+x]+rs}}
+  const r=Math.max(8,Math.round(W/28)),bin=new Uint8ClampedArray(N);
+  for(let y=0;y<H;y++){const ya=Math.max(0,y-r),yb=Math.min(H,y+r+1);for(let x=0;x<W;x++){const xa=Math.max(0,x-r),xb=Math.min(W,x+r+1);
+    const sum=I[yb*(W+1)+xb]-I[ya*(W+1)+xb]-I[yb*(W+1)+xa]+I[ya*(W+1)+xa],mean=sum/((yb-ya)*(xb-xa));
+    bin[y*W+x]=gray[y*W+x]<mean*0.86&&gray[y*W+x]<200?0:255}}
+  const out=async arr=>{for(let i=0;i<N;i++){d[4*i]=d[4*i+1]=d[4*i+2]=arr[i];d[4*i+3]=255}g.putImageData(img,0,0);return await new Promise(res=>c.toBlob(res,'image/png'))};
+  return {bin:await out(bin),gray:await out(gray),box,scale:s};
+}
+const MOIS={janv:1,jan:1,janvier:1,fevr:2,fev:2,fevrier:2,feb:2,mars:3,mar:3,avr:4,avril:4,apr:4,mai:5,may:5,juin:6,jun:6,juil:7,juillet:7,jul:7,aout:8,aug:8,sept:9,sep:9,septembre:9,oct:10,octobre:10,nov:11,novembre:11,dec:12,decembre:12};
+// Villes françaises courantes : une ville lue avec une ou deux lettres fausses (« Strasbourc ») est corrigée ;
+// une ville absente de la liste est gardée telle quelle.
+const VILLES=('Paris Marseille Lyon Toulouse Nice Nantes Montpellier Strasbourg Bordeaux Lille Rennes Reims Toulon Grenoble Dijon Angers Nîmes Villeurbanne '+
+ 'Clermont-Ferrand Le Mans Aix-en-Provence Brest Tours Amiens Limoges Annecy Perpignan Boulogne-Billancourt Metz Besançon Orléans Rouen Mulhouse Caen Nancy '+
+ 'Argenteuil Montreuil Saint-Denis Roubaix Tourcoing Avignon Nanterre Créteil Poitiers Versailles Courbevoie Colombes Pau Rueil-Malmaison Antibes Cannes '+
+ 'Calais Saint-Nazaire Colmar Haguenau Sélestat Saverne Obernai Molsheim Schiltigheim Illkirch-Graffenstaden Lingolsheim Bischheim Erstein Wissembourg '+
+ 'Thionville Forbach Sarreguemines Saint-Avold Épinal Saint-Dié-des-Vosges Belfort Montbéliard Troyes Châlons-en-Champagne Charleville-Mézières Chartres '+
+ 'Le Havre Saint-Étienne La Rochelle Bayonne Biarritz Lorient Vannes Quimper Saint-Malo Laval Cholet Niort Angoulême Valence Chambéry Grasse Fréjus '+
+ 'Béziers Narbonne Sète Arles Cergy Évry Massy Roissy-en-France Marne-la-Vallée Lens Douai Valenciennes Dunkerque Arras Beauvais Compiègne Mâcon '+
+ 'Chalon-sur-Saône Nevers Bourges Blois Vichy Le Puy-en-Velay Aurillac Rodez Albi Montauban Agen Tarbes Lourdes Carcassonne Bastia Ajaccio '+
+ 'Luxembourg Bâle Genève Lausanne Zurich Bruxelles Karlsruhe Fribourg Sarrebruck Kehl Offenbourg Baden-Baden Abu Dhabi Dubaï').split(/ (?=\p{Lu})/u);
+function levD(x,y){const d=Array.from({length:x.length+1},(_,i)=>[i]);for(let j=1;j<=y.length;j++)d[0][j]=j;
+  for(let i=1;i<=x.length;i++)for(let j=1;j<=y.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(x[i-1]===y[j-1]?0:1));return d[x.length][y.length]}
+function fixCity(c){
+  const k=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z]/g,'');
+  const a=k(c);if(a.length<4)return c;
+  const lev=(x,y)=>{const d=Array.from({length:x.length+1},(_,i)=>[i]);for(let j=1;j<=y.length;j++)d[0][j]=j;
+    for(let i=1;i<=x.length;i++)for(let j=1;j<=y.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(x[i-1]===y[j-1]?0:1));return d[x.length][y.length]};
+  let best=null,bd=9;
+  for(const v of VILLES){const b=k(v);if(Math.abs(b.length-a.length)>2)continue;const d=lev(a,b);if(d<bd){bd=d;best=v}}
+  return best&&(bd===0||bd<=(a.length>=8?2:1))?best:c;
+}
 function parseReceipt(text){
   const raw=text.replace(/\r/g,'');const lines=raw.split('\n').map(s=>s.trim()).filter(Boolean);
   const plain=s=>s.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
   const low=plain(raw);
-  // date : première date plausible (pas dans le futur, moins de 2 ans)
-  let date='';const now=new Date();
-  const ok=(y,m,d)=>{if(y<100)y+=2000;const t=new Date(y,m-1,d);if(t.getMonth()!==m-1||t>now||now-t>730*864e5)return '';return y+'-'+pad(m)+'-'+pad(d)};
-  for(const mm of raw.matchAll(/\b(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})\b/g)){date=ok(+mm[3],+mm[2],+mm[1]);if(date)break}
-  if(!date)for(const mm of plain(raw).matchAll(/\b(\d{1,2})\s+([a-z]{3,5})\.?\s+(\d{4})\b/g)){const mo=MOIS[mm[2]]||MOIS[mm[2].slice(0,4)]||MOIS[mm[2].slice(0,3)];if(mo){date=ok(+mm[3],mo,+mm[1]);if(date)break}}
-  if(!date)for(const mm of raw.matchAll(/\b(20\d{2})[\/.\-](\d{1,2})[\/.\-](\d{1,2})\b/g)){date=ok(+mm[1],+mm[2],+mm[3]);if(date)break}
-  // montant : priorité aux lignes « total / à payer / TTC », sinon le plus grand montant
-  // montants à 2 décimales ; un nombre suivi de « % » est un taux, pas un montant
+  // chiffres mal lus par l'OCR dans les nombres (O→0, l/I/|→1, S→5, B→8) et espaces parasites autour de la virgule
+  const fixNums=s=>s
+    .replace(/[0-9OoIl|SB]+(?:\s?[,.]\s?[0-9OoIl|SB]{2})?(?=\b|€|%)/g,t=>/\d/.test(t)?t.replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/S/g,'5').replace(/B/g,'8'):t)
+    .replace(/(\d)\s*[»«’'`]\s*(\d{2})(?!\d)/g,'$1,$2')
+    .replace(/(\d)\s+([,.])\s*(\d{2})(?!\d)/g,'$1$2$3').replace(/(\d)([,.])\s+(\d{2})(?!\d)/g,'$1$2$3');
+  // mots-clés abîmés par l'OCR (« TroTrAL », « TOTAI », « TIC ») ramenés à « total » / « ttc »
+  const fuzz=p=>p.replace(/\b[a-z0-9]{3,8}\b/g,w=>w[0]!=='t'?w:(w.length>=4&&w!=='table'&&levD(w,'total')<=2)?'total':(w.length===3&&!['tva','tel','ter','tag','tri','top','the'].includes(w)&&levD(w,'ttc')<=1)?'ttc':w);
+  const nl=lines.map(fixNums),np=nl.map(l=>fuzz(plain(l)));
+  // ---- date : candidats pondérés (mot « date », « le », heure proche), jamais dans le futur ni de plus de 2 ans
+  const now=new Date();
+  const ok=(y,m,d)=>{if(y<100)y+=2000;const t=new Date(y,m-1,d);if(t.getMonth()!==m-1||t>new Date(now.getTime()+864e5)||now-t>730*864e5)return '';return y+'-'+pad(m)+'-'+pad(d)};
+  const dates=[];
+  nl.forEach((l,i)=>{const p=np[i],w=(/\b(date|le|du|emis|edite|facture)\b/.test(p)?2:0)+(/\b\d{1,2}[:h]\d{2}\b/.test(l)?1:0)-(/\b(valid|expir|echeance|peremption)/.test(p)?3:0);
+    for(const m of l.matchAll(/\b(\d{1,2})\s?[\/.\-]\s?(\d{1,2})\s?[\/.\-]\s?(\d{4}|\d{2})\b/g)){const d=ok(+m[3],+m[2],+m[1]);if(d)dates.push({d,w,i})}
+    for(const m of l.matchAll(/\b(20\d{2})[\/.\-](\d{1,2})[\/.\-](\d{1,2})\b/g)){const d=ok(+m[1],+m[2],+m[3]);if(d)dates.push({d,w,i})}
+    for(const m of p.matchAll(/\b(\d{1,2})\s+([a-z]{3,9})\.?\s+(\d{4})\b/g)){const mo=MOIS[m[2]]||MOIS[m[2].slice(0,4)]||MOIS[m[2].slice(0,3)];if(mo){const d=ok(+m[3],mo,+m[1]);if(d)dates.push({d,w:w+1,i})}}});
+  dates.sort((a,b)=>b.w-a.w||a.i-b.i);
+  const date=dates.length?dates[0].d:'';
+  // ---- montants : 2 décimales ; un nombre suivi de « % » est un taux
   const amt=s=>[...s.matchAll(/(\d{1,5}(?:[ .]\d{3})*)[,.](\d{2})(?!\d)(?!\s*%)/g)].map(m=>Number(m[1].replace(/[ .]/g,'')+'.'+m[2]));
-  let montant=null;
-  const prio=[/net\s*a\s*payer|a\s*payer|montant\s*du/,/total\s*ttc|ttc/,/\btotal\b/,/\b(cb|carte|visa|mastercard|paiement|regle)\b/];
-  for(const re of prio){for(const l of lines){if(re.test(plain(l))&&!/ht\b|tva/.test(plain(l))){const a=amt(l);if(a.length){montant=Math.max(...a);break}}}if(montant!=null)break}
-  if(montant==null){const all=lines.flatMap(amt).filter(v=>v<10000);if(all.length)montant=Math.max(...all)}
+  const EXCL=/\b(rendu|monnaie|a rendre|remise|economi|fidelite|points?|cagnotte|avoir|acompte|tva|h\.?t\.?|hors tax|base|taux|ttc\s+tva)\b|n[°o]\s|\btel\b|siret|siren/;
+  const TOTAL_KW=[[/net\s*a\s*payer|a\s*payer|montant\s*du\b|total\s*a\s*regler/,5],[/total\s*ttc|montant\s*ttc|total\s*eur|total\s*€|\bttc\b/,4],[/\btotal\b|\bpaye\b|\bregle\b|\breglement\b|\bsomme\b|\bsolde\b/,3],
+    [/\b(cb|carte|visa|mastercard|amex|especes|cheque|sans contact|contactless|paiement|debit)\b/,2],[/\bsous[- ]?total\b/,1]];
+  const cands=[];
+  nl.forEach((l,i)=>{const p=np[i];const a=amt(l);if(!a.length)return;
+    for(const [re,w] of TOTAL_KW)if(re.test(p)&&!(EXCL.test(p)&&!/total\s*ttc|montant\s*ttc/.test(p))){cands.push({v:a[a.length-1],w,i});break}});
+  // tableau de TVA (lu plus bas) : sa colonne TTC sert de contrôle du total
+  // ---- TVA : lignes avec un taux français (« 5,50% », « TVA 20 », ou 1re colonne sous un en-tête « Taux / HT / TVA »)
+  const rows=[];let totalHT=null,totalTVA=null,ttcFromTable=null;
+  const isRate=v=>RATES.some(R=>Math.abs(R-v)<0.011);
+  let headerAt=-9;
+  nl.forEach((l,i)=>{const p=np[i];
+    if(/n[°o]\s*(de\s*)?tva|intracom|tva\s*intra|\bfr\s?\d{2}/.test(p))return;
+    if(/(tva|taux|\btx\b)/.test(p)&&/(\bht\b|h\.t|base|\bttc\b)/.test(p)&&!amt(l).length){headerAt=i;return}
+    const a=amt(l);
+    let rm=l.match(/(?:^|[^\d,.])(\d{1,2}(?:[,.]\d{1,2})?)\s*%/);
+    let rate=rm?Number(rm[1].replace(',','.')):null;
+    // « % » lu « 4 », « 8 », « $ » ou « ° » après un taux à 2 décimales (« 10,004 », « 20,008 », « 5,50$ »)
+    if(rate==null){const r2m=l.match(/(?:^|[^\d,.])(\d{1,2}[,.]\d{2})[48$°9](?=\s|$)/);
+      if(r2m&&isRate(Number(r2m[1].replace(',','.')))){rm=r2m;rate=Number(r2m[1].replace(',','.'));const ix=a.findIndex(v=>Math.abs(v-rate)<0.011);if(ix===0)a.splice(0,1)}}
+    if((rate==null||!isRate(rate))&&i-headerAt<=5){ // sous un en-tête : le 1er nombre de la ligne est le taux (« 5,50 6,64 0,36 7,00 », « A 20,00 … »)
+      const nums=[...l.matchAll(/\d{1,2}[,.]\d{1,2}(?!\d)/g)].map(m=>Number(m[0].replace(',','.')));
+      if(nums.length>=3&&isRate(nums[0])){rate=nums[0];const rest=a.filter((v,ix)=>!(ix===0&&Math.abs(v-rate)<0.011));const x=vatRow(rate,rest,null);if(x){rows.push(x);const big=Math.max(...rest);if(big>x.base)ttcFromTable=(ttcFromTable||0)+big;return}}}
+    if(rate!=null&&isRate(rate)&&a.length){const x=vatRow(rate,a,a.length===1?a[0]:null);if(x){rows.push(x);const big=Math.max(...a);if(x.base!=null&&big>x.base&&near(big,x.base+x.tva,big))ttcFromTable=(ttcFromTable||0)+big;return}}
+    if(/total\s*h\.?t|\bh\.?t\.?\b|hors\s*tax/.test(p)&&!/ttc/.test(p)&&a.length){totalHT=a[a.length-1];return}
+    if(/(total\s*|dont\s*)?t\.?v\.?a\b|\btaxes?\b/.test(p)&&!/ttc|sejour/.test(p)&&a.length&&!rm)totalTVA=a[a.length-1];
+  });
+  // ---- choix du total : mot-clé le plus fort, recoupé avec le TTC du tableau de TVA s'il existe
+  let montant=null,montantW=0;
+  cands.sort((x,y)=>y.w-x.w||y.i-x.i);
+  if(ttcFromTable!=null){const m=cands.find(c=>Math.abs(c.v-ttcFromTable)<0.02);montant=m?m.v:(cands.length&&cands[0].w>=4?cands[0].v:r2(ttcFromTable))}
+  else if(cands.length){montant=cands[0].v;montantW=cands[0].w}
+  // premier chiffre perdu par l'OCR (« TOTAL e8,35 » lu 8,35 alors que la ligne CB dit 88,35) : on garde le montant le plus long
+  if(montant!=null){const alt=cands.find(c=>c.v>montant&&c.v.toFixed(2).endsWith(montant.toFixed(2)));if(alt){montant=alt.v;montantW=Math.max(montantW,alt.w)}}
+  if(montant==null){const all=nl.filter((l,i)=>!EXCL.test(np[i])).flatMap(amt).filter(v=>v<10000);if(all.length)montant=Math.max(...all)}
+  // recoupement : avec une TVA d'un seul taux, le TTC vaut TVA × (1 + taux) / taux (± arrondi) ; si le total choisi ne colle pas
+  // et qu'un autre montant du ticket colle, c'est lui le total (cas « Espèces 10,00 » pris pour le total)
+  {const rs=rows.filter(Boolean),one=[...new Set(rs.map(x=>x.taux))];
+   if(rs.length&&one.length===1&&ttcFromTable==null){const r=one[0]/100,t=rs.reduce((a,x)=>a+x.tva,0),exp=t*(1+r)/r,tol=0.006*(1+r)/r+0.02;
+     // seulement si le total retenu est faible (ligne de paiement, espèces) ou impossible (inférieur à ce qu'implique la TVA) :
+     // un « TOTAL TTC » imprimé plus grand peut contenir une part hors TVA (taxe de séjour)
+     if(montant==null||(Math.abs(montant-exp)>tol&&(montantW<=2||montant<exp-tol))){const pool=[...cands.map(c=>c.v),...nl.filter((l,i)=>!EXCL.test(np[i])).flatMap(amt)];
+       const fit=pool.find(v=>Math.abs(v-exp)<=tol);if(fit!=null)montant=fit}}}
+  // ---- devise
   let devise='EUR';
   if(/\busd\b|\$/.test(low))devise='USD';else if(/\baed\b|dirham/.test(low))devise='AED';else if(/\bchf\b/.test(low))devise='CHF';else if(/£|\bgbp\b/.test(low))devise='GBP';
   if(/€|\beur\b|euro/.test(low))devise='EUR';
-  // prestataire : une ligne du haut qui ressemble vraiment à un nom (sinon vide : un logo lu par l'OCR donne du bruit)
+  // ---- prestataire : une ligne du haut qui ressemble vraiment à un nom (sinon vide : un logo lu par l'OCR donne du bruit)
   const NOT_NAME=/\b(ticket|facture|recu|bienvenue|merci|bientot|tel|telephone|fax|siret|siren|naf|ape|tva|www|caisse|date|heure|cedex|client|serveur|vendeur|copie|duplicata|total|montant|article|qte|prix)\b|http|@|\bn[°o]\s|\btable\s*(n|\d)|\bcarte\s*(bancaire|cb|bleue)|^\d+\s*(bis|ter)?,?\s*(rue|av|avenue|bd|boulevard|place|chemin|route|allee|quai|impasse|cours)\b/;
   const looksLikeName=l=>{
     const p=plain(l),letters=(l.match(/\p{L}/gu)||[]).length,chars=l.replace(/\s/g,'').length;
@@ -839,48 +988,60 @@ function parseReceipt(text){
     const real=words.filter(w=>/^[\p{L}'&\-.]{2,}$/u.test(w)&&/[aeiouyàâéèêëîïôöûü]/i.test(w));   // mots avec voyelle
     return real.length>=1&&real.length/words.length>=0.6&&real.some(w=>w.length>=3);
   };
-  const cpIdx=lines.findIndex(l=>/\b\d{5}\b\s+\p{L}{3,}/u.test(l));
+  const cpIdx=nl.findIndex(l=>/\b\d{5}\b\s+\p{L}{3,}/u.test(l));
   const zone=lines.slice(0,Math.min(8,cpIdx>0?cpIdx:8));
-  // nettoyage : bruit OCR en fin de ligne (« p- », « | ») retiré
   const merch=(zone.find(looksLikeName)||'').replace(/[^\p{L}\p{N} '&\-.]/gu,'').replace(/\s+/g,' ').trim()
     .split(' ').filter((w,i,a)=>!(i===a.length-1&&!/^\p{L}[\p{L}'\-]{2,}$|^(de|du|la|le)$/iu.test(w))).join(' ').slice(0,40);
-  // ville : après un code postal
-  // (majuscules ou minuscules, sur la même ligne que le code postal : « 75009 paris », « 67000 STRASBOURG CEDEX »)
-  let lieu='';const cp=raw.match(/\b\d{5}[ \t]+(\p{L}[\p{L}' \-]{1,30})/u);
-  if(cp)lieu=cp[1].trim().split(/\s{2,}/)[0].replace(/\s+cedex.*$/i,'').trim();
-  lieu=lieu.toLowerCase().replace(/(^|[\s\-'])\p{L}/gu,c=>c.toUpperCase());
-  // nature
-  // mots entiers seulement (« emporTER » n'est pas le train TER) ; la nature qui a le plus d'indices l'emporte
+  // ---- ville : après un code postal (majuscules ou minuscules), sinon ligne de lettres juste après la rue
+  const cap=s=>s.toLowerCase().replace(/(^|[\s\-'])\p{L}/gu,c=>c.toUpperCase());
+  let lieu='';
+  for(const l of nl){const m=l.match(/\b\d{5}[ \t]+(\p{L}[\p{L}' \-]{1,30})/u);if(m){lieu=m[1].trim().split(/\s{2,}/)[0].replace(/\s+cedex.*$/i,'').trim();break}}
+  if(!lieu){const k=np.findIndex(p=>/^\d+\s*(bis|ter)?,?\s*(rue|av|avenue|bd|boulevard|place|chemin|route|allee|quai|impasse|cours)\b/.test(p));
+    if(k>=0&&k+1<lines.length&&/^[\p{L}' \-]{3,30}$/u.test(lines[k+1])&&!NOT_NAME.test(np[k+1]))lieu=lines[k+1].trim()}
+  // ville coupée par l'OCR (« par is ») : un morceau de 1-2 lettres qui n'est pas un article est recollé au mot précédent
+  lieu=lieu.split(/\s+/).reduce((a,w,i)=>i&&w.length<=2&&!/^(le|la|de|du|en|st|ste|sur|lès|les)$/i.test(w)?a.slice(0,-1).concat(a[a.length-1]+w):a.concat(w),[]).join(' ');
+  lieu=lieu?fixCity(cap(lieu)):'';
+  // ---- nature : mots entiers ; la nature qui a le plus d'indices l'emporte (« emporTER » n'est pas le train TER)
   const KW={
-    hotel:/\b(hotel|ibis|novotel|mercure|campanile|kyriad|b&b|nuitee|nuitees|chambre|hebergement|airbnb|taxe de sejour)\b/g,
-    voyage:/\b(sncf|tgv|ouigo|ter|billet|taxi|uber|g7|bolt|heetch|peage|autoroute|sanef|aprr|parking|indigo|effia|carburant|gazole|gasoil|sp95|sp98|e10|diesel|esso|shell|totalenergies|station service|avis|hertz|europcar|sixt|ratp|navigo|metro|air france|easyjet|transavia|vol|bus|tram)\b/g,
-    repas:/\b(restaurant|brasserie|bistro|bistrot|cafe|cafes|expresso|espresso|cappuccino|menu|plat|plats|dessert|boisson|couvert|couverts|boulangerie|patisserie|viennoiserie|pain|choco|croissant|financier|sandwich|pizza|pizzeria|sushi|burger|mcdonald|kfc|traiteur|dejeuner|diner|emporter|sur place|salade|biere|vin|eau)\b/g};
+    hotel:/\b(hotel|ibis|novotel|mercure|campanile|kyriad|b&b|premiere classe|nuitee|nuitees|nuit|nuits|chambre|hebergement|airbnb|taxe de sejour|sejour)\b/g,
+    voyage:/\b(sncf|tgv|ouigo|ter|billet|taxi|vtc|uber|g7|bolt|heetch|peage|autoroute|sanef|aprr|asf|cofiroute|parking|stationnement|horodateur|indigo|effia|carburant|gazole|gasoil|sp95|sp98|e10|e85|diesel|sans plomb|litres?|pompe|esso|shell|bp|totalenergies|station service|avis|hertz|europcar|sixt|ada|ratp|navigo|metro|air france|easyjet|transavia|vol|bus|tram|location)\b/g,
+    repas:/\b(restaurant|resto|brasserie|bistro|bistrot|cafe|cafes|expresso|espresso|cappuccino|menu|formule|plat|plats|dessert|desserts|boisson|boissons|couvert|couverts|addition|serveur|table|boulangerie|patisserie|viennoiserie|pain|choco|croissant|financier|sandwich|pizza|pizzeria|sushi|burger|mcdonald|kfc|traiteur|dejeuner|diner|emporter|sur place|salade|biere|vin|eau|cuisine)\b/g};
   const score=Object.fromEntries(Object.entries(KW).map(([k,re])=>[k,(low.match(re)||[]).length]));
   let cat='divers';
   const best=Object.entries(score).sort((a,b)=>b[1]-a[1])[0];
   if(best[1]>0)cat=best[0];
-  if(cat==='repas'){const cv=low.match(/(\d+)\s*couverts?/);if(cv&&+cv[1]>=3)cat='reception'}
+  // nombre de couverts : « Couverts : 4 », « Couverts 2 » ou « 4 couverts » (pas « Table 12  Couverts 2 »)
+  if(cat==='repas'){const cv=low.match(/\b(?:couverts?|convives|nb\s*pers(?:onnes)?)\s*:?\s*(\d{1,2})\b/)||low.match(/(?<!table\s{0,3})\b(\d{1,2})\s*(?:couverts?|convives|personnes)\b/);if(cv&&+cv[1]>=3)cat='reception'}
   const labels={hotel:'Hôtel',voyage:'Transport',repas:'Repas',reception:'Réception',divers:'Achat'};
   const libelle=(labels[cat]+(merch?' – '+merch:'')).slice(0,40);
-  // HT / TVA : lignes du tableau de TVA (un taux français + des montants), puis lignes de totaux ; contrôle par resolveVat
-  const rateRe=/(?:^|[^\d,.])(\d{1,2}(?:[,.]\d{1,2})?)\s*%/;   // « 20% », « 5,50 % », « 10,00% »
-  const rows=[];let totalHT=null,totalTVA=null;
-  for(const l of lines){const p=plain(l);
-    if(/n[°o]\s*(de\s*)?tva|intracom|tva\s*intra|\bfr\s?\d{2}/.test(p))continue;          // n° de TVA intracommunautaire
-    const rm=l.match(rateRe),a=amt(l).filter(v=>montant==null||v<=montant+0.01);
-    const rate=rm?Number(rm[1].replace(',','.')):null;
-    if(rate!=null&&RATES.some(R=>Math.abs(R-rate)<0.01)&&a.length){const x=vatRow(rate,a,a.length===1?a[0]:null);if(x){rows.push(x);continue}}
-    if(/total\s*h\.?t|\bh\.?t\.?\b|hors\s*tax/.test(p)&&!/ttc/.test(p)&&a.length){totalHT=Math.max(...a);continue}
-    if(/(total\s*)?t\.?v\.?a\b|\btaxes?\b/.test(p)&&!/ttc|sejour/.test(p)&&a.length&&!rm){const v=a.filter(x=>montant==null||x<montant);if(v.length)totalTVA=Math.max(...v)}
-  }
-  const vat=resolveVat(montant,{rows,totalHT,totalTVA});
+  const vat=resolveVat(montant,{rows,totalHT,totalTVA,horsTvaCite:/sejour|consigne|exonere|non soumis|hors\s*tva|debours/.test(low)});
   const conf=(date&&montant!=null)?'moyenne':'basse';
   return {erreur:false,date,prestataire:merch,libelle,lieu,montant,ht:vat.ht,tva:vat.tva,taux:vat.taux,horsTva:vat.horsTva,vatDoute:vat.doute,devise,categorie:cat,confiance:conf,source:'local'};
 }
+// note de complétude d'une lecture : sert à choisir entre deux passes
+function readScore(r){return (r.date?2:0)+(r.montant!=null?3:0)+(r.ht!=null?2:0)+(r.prestataire?1:0)+(r.lieu?1:0)+(r.categorie&&r.categorie!=='divers'?1:0)-(r.vatDoute?1:0)}
 async function readLocally(blob){
   const w=await tessWorker();
-  const {data}=await w.recognize(blob);
-  return parseReceipt(data.text||'');
+  let prep=null;try{prep=await prepareReceipt(blob)}catch(e){}
+  const pass=async(img,psm)=>{await w.setParameters({tessedit_pageseg_mode:psm});const {data}=await w.recognize(img);return {text:data.text||'',r:parseReceipt(data.text||'')}};
+  // passe 1 : image seuillée, mode « bloc » ; passe 2 (si date, total ou TVA manquent) : image en gris, même mode
+  let a=await pass(prep?prep.bin:blob,'6');const passes=[a];
+  if(!(a.r.date&&a.r.montant!=null&&!a.r.vatDoute)&&prep){
+    const b=await pass(prep.gray,'6');passes.push(b);
+    const [best,other]=readScore(b.r)>readScore(a.r)?[b,a]:[a,b];
+    const r=Object.assign({},best.r);
+    for(const k of ['date','prestataire','lieu'])if(!r[k]&&other.r[k])r[k]=other.r[k];
+    if(r.montant==null&&other.r.montant!=null)r.montant=other.r.montant;
+    if(r.ht==null&&other.r.ht!=null&&other.r.montant===r.montant)Object.assign(r,{ht:other.r.ht,tva:other.r.tva,taux:other.r.taux,horsTva:other.r.horsTva,vatDoute:false});
+    if(r.categorie==='divers'&&other.r.categorie!=='divers'){r.categorie=other.r.categorie;r.libelle=other.r.libelle}
+    a={text:best.text,r};
+  }
+  // contrôle final : après fusion des passes, HT + TVA doit encore coller au TTC retenu (sauf petite part hors TVA)
+  {const r=a.r;if(r.ht!=null&&r.tva!=null&&r.montant!=null){const d=r.montant-r.ht-r.tva;
+    if(d<-Math.max(0.015,0.0002*r.montant)||d>0.1*r.montant)Object.assign(r,{ht:null,tva:null,taux:'',horsTva:0,vatDoute:true})}}
+  a.r.ocrText=a.text.slice(0,3000);
+  readLocally.last=passes;   // pour le banc d'essai : textes et lectures de chaque passe
+  return a.r;
 }
 
 function applyReading(cur,r){
@@ -896,6 +1057,7 @@ function applyReading(cur,r){
   if(!t.ht){cur.ht=typeof r.ht==='number'?r.ht:null;cur.tva=typeof r.tva==='number'?r.tva:null;cur.taux=r.taux||'';cur.horsTva=r.horsTva||0;cur.vatDoute=!!r.vatDoute}
   if(cur.projAuto&&!t.projet)cur.projet=defaultProject(cur.date);
   ensureJustif(cur);
+  cur.ocrText=r.ocrText||'';
   cur.confiance=r.confiance||'';cur.source=r.source;cur.status='ok';cur.errMsg='';
 }
 async function analyse(id,blob,opts={}){
@@ -904,7 +1066,7 @@ async function analyse(id,blob,opts={}){
   let r=null,err=null;
   if(useClaude){try{r=await readOnline(blob)}catch(e){err=e}}
   if(!r&&(!useClaude||(err&&err.kind==='offline'))){
-    try{r=await readLocally(blob);if(prov()!=='local'&&provKey())r.pendingClaude=true}catch(e){err=err||{kind:'fatal',msg:'La lecture locale a échoué : '+(e&&e.message||e)}}
+    try{r=await readLocally(opts.orig||blob);if(prov()!=='local'&&provKey())r.pendingClaude=true}catch(e){err=err||{kind:'fatal',msg:'La lecture locale a échoué : '+(e&&e.message||e)}}
   }
   const cur=L.find(x=>x.id===id);if(!cur)return;
   if(r&&r.erreur){cur.status='erreur';cur.errMsg="Aucun justificatif reconnu sur cette photo.";cur.pendingClaude=false}
@@ -938,7 +1100,7 @@ function closeEditor(){edId=null;edDraft=null;$('ed').hidden=true;document.body.
 function fillEditor(l,fromAnalyse){
   // après lecture : on ne remplace que ce que l'utilisateur n'a pas déjà touché dans l'éditeur
   if(fromAnalyse&&edDraft){
-    for(const k of ['date','libelle','lieu','prestataire','cat','montant','projet','status','errMsg','confiance','source','pendingClaude','photo','w','h'])if(!edDraft.touched[k])edDraft[k]=l[k];
+    for(const k of ['date','libelle','lieu','prestataire','cat','montant','projet','status','errMsg','confiance','source','pendingClaude','photo','w','h','ocrText'])if(!edDraft.touched[k])edDraft[k]=l[k];
     if(!edDraft.touched.montant)for(const k of ['devise','montantOrig','converti'])edDraft[k]=l[k];
     if(!edDraft.touched.ht){edDraft.ht=l.ht;edDraft.tva=l.tva;edDraft.taux=l.taux;edDraft.horsTva=l.horsTva;edDraft.vatDoute=l.vatDoute}
     if(!edDraft.touched.justif){edDraft.justif=l.justif;edDraft.justifMonth=l.justifMonth}
@@ -952,9 +1114,10 @@ function fillEditor(l,fromAnalyse){
   const st=$('ed-status');st.hidden=false;st.className='status';
   if(d.status==='analyse')st.innerHTML='<i class="spin"></i> Lecture du ticket…';
   else if(d.status==='erreur'){st.className='msg bad';st.textContent=d.errMsg||'La lecture a échoué.'}
-  else if(d.status==='ok'&&d.source==='local'){st.className='msg warn';st.textContent='Lu sur le téléphone, sans réseau : vérifiez la date et le montant.'+(d.pendingClaude?' Le ticket sera relu en ligne au retour du réseau (vos corrections sont gardées).':'')}
+  else if(d.status==='ok'&&d.source==='local'){st.className='msg warn';st.textContent=(prov()==='local'?'Lu sur le téléphone : vérifiez la date, le montant et la TVA (vides si illisibles).':'Lu sur le téléphone, sans réseau : vérifiez la date et le montant.')+(d.pendingClaude?' Le ticket sera relu en ligne au retour du réseau (vos corrections sont gardées).':'')}
   else if(d.status==='ok'){st.innerHTML='';const s=document.createElement('span');s.textContent='Lu par '+(PROV_NAME[d.source]||'Claude')+(d.confiance&&d.confiance!=='haute'?' (confiance '+d.confiance+') — vérifiez les montants':' — vérifiez avant d\'enregistrer');st.append(s)}
   else st.hidden=true;
+  $('ed-ocr').hidden=!d.ocrText;$('ed-ocr-t').textContent=d.ocrText||'';
   const seg=$('ed-cat');seg.innerHTML='';
   for(const c of CATS){const b=document.createElement('button');b.type='button';b.textContent=c.lab;b.setAttribute('aria-pressed',d.cat===c.k);
     b.onclick=()=>{edDraft.cat=c.k;edDraft.touched.cat=true;fillEditor(L.find(x=>x.id===edId)||edDraft)};seg.append(b)}
