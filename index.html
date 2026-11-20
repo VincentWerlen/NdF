@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Notes de frais</title>
 <meta name="description" content="Scan des tickets, projets par défaut, export Excel au format FI407/A.">
-<meta name="theme-color" content="#D9773A">
+<meta name="theme-color" content="#4E6F67">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
@@ -15,20 +15,23 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
 /* Layout: one-column phone tool — orange month banner, line list, bottom tab bar, full-screen line editor.
-   Couleur : orange mat Neu Railways (--accent) en aplats avec texte foncé ; --accent-strong pour l'orange en texte ou en trait. */
+   Couleurs Neu Railways : gris clair, blanc et gris-vert (--accent en aplat, --accent-strong en texte), une seule touche d'orange (--touch) sur le bouton photo. */
 :root{
-  --bg:#FBF6F1; --surface:#FFFFFF; --ink:#2B231E; --muted:#6F6158; --line:#EBDFD4;
-  --accent:#D9773A; --accent-ink:#2B1A10; --accent-strong:#B14D17; --accent-soft:#FBE6D6; --on-accent-soft:rgba(255,255,255,.28); --warn:#9A5B00; --warn-soft:#FDF0DC; --bad:#A3302A; --bad-soft:#F9E3E1; --ok:#2F7A45;
+  --bg:#F3F5F4; --surface:#FFFFFF; --ink:#243330; --muted:#5F6E6A; --line:#DCE3E0;
+  --accent:#4E6F67; --accent-ink:#FFFFFF; --accent-strong:#3E5C55; --accent-soft:#E6EDEA; --on-accent-soft:rgba(255,255,255,.2);
+  --touch:#D9773A; --touch-ink:#2B1A10; --warn:#9A5B00; --warn-soft:#FDF0DC; --bad:#A3302A; --bad-soft:#F9E3E1; --ok:#2F7A45;
   --f-display:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --f-body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --f-num:ui-monospace,"SFMono-Regular","Roboto Mono",Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#1B1410; --surface:#251C17; --ink:#EADCCF; --muted:#A8968A; --line:#3A2C23;
-  --accent:#E58A50; --accent-ink:#2B1A10; --accent-strong:#F0955A; --accent-soft:#3B2518; --on-accent-soft:rgba(255,255,255,.22); --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}}
+  --bg:#141918; --surface:#1C2321; --ink:#E2EAE7; --muted:#9AA9A5; --line:#2E3A37;
+  --accent:#93B5AB; --accent-ink:#121A18; --accent-strong:#A9C4BC; --accent-soft:#25332F; --on-accent-soft:rgba(255,255,255,.25);
+  --touch:#E58A50; --touch-ink:#2B1A10; --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#1B1410; --surface:#251C17; --ink:#EADCCF; --muted:#A8968A; --line:#3A2C23;
-  --accent:#E58A50; --accent-ink:#2B1A10; --accent-strong:#F0955A; --accent-soft:#3B2518; --on-accent-soft:rgba(255,255,255,.22); --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}
+  --bg:#141918; --surface:#1C2321; --ink:#E2EAE7; --muted:#9AA9A5; --line:#2E3A37;
+  --accent:#93B5AB; --accent-ink:#121A18; --accent-strong:#A9C4BC; --accent-soft:#25332F; --on-accent-soft:rgba(255,255,255,.25);
+  --touch:#E58A50; --touch-ink:#2B1A10; --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}
 *,*::before,*::after{box-sizing:border-box}
 [hidden]{display:none!important}
 html{color-scheme:light;padding-top:env(safe-area-inset-top,0px)}
@@ -45,14 +48,14 @@ button{cursor:pointer}
 .eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 
 /* header */
-.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 14px;margin-bottom:14px;background:var(--accent);color:var(--accent-ink);border-radius:18px}
-.top .eyebrow{color:var(--accent-ink);opacity:.8}
-.top .icon-btn{background:var(--on-accent-soft);border-color:transparent;color:var(--accent-ink)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 14px;margin-bottom:14px;background:var(--accent-soft);color:var(--accent-strong);border-radius:18px}
+.top .eyebrow{color:var(--accent-strong);opacity:.85}
+.top .icon-btn{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
 /* bandeau du mois : navigation sur une ligne, total en dessous (ne se coupe jamais) */
 #v-note .top{flex-direction:column;align-items:stretch;gap:10px}
 #v-note .month{justify-content:space-between}
 #v-note .month h1{white-space:nowrap}
-#v-note .total{display:flex;justify-content:space-between;align-items:baseline;text-align:left;border-top:1px solid var(--on-accent-soft);padding-top:10px}
+#v-note .total{display:flex;justify-content:space-between;align-items:baseline;text-align:left;border-top:1px solid var(--line);padding-top:10px}
 #v-note .total .num{font-size:26px;font-weight:600;white-space:nowrap}
 .top .num{white-space:nowrap}
 .month{display:flex;align-items:center;gap:4px}
@@ -94,7 +97,7 @@ button{cursor:pointer}
 .tab{background:none;border:0;padding:8px 4px 10px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11.5px;color:var(--muted)}
 .tab svg{width:22px;height:22px}
 .tab[aria-current="page"]{color:var(--accent-strong);font-weight:700}
-.scan{margin:-22px 10px 8px;width:66px;height:66px;border-radius:20px;background:var(--accent);color:var(--accent-ink);border:4px solid var(--bg);display:grid;place-items:center;box-shadow:0 6px 16px rgba(120,50,10,.28)}
+.scan{margin:-22px 10px 8px;width:66px;height:66px;border-radius:20px;background:var(--touch);color:var(--touch-ink);border:4px solid var(--bg);display:grid;place-items:center;box-shadow:0 6px 16px rgba(120,50,10,.28)}
 .scan svg{width:28px;height:28px}
 .scan-label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 
@@ -319,7 +322,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.2.0';
+const APP_VERSION='1.2.1';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
