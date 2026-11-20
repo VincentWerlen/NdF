@@ -284,14 +284,21 @@ a.btn{text-decoration:none;color:inherit}
     <div class="field"><label>Nature</label><div class="seg" id="ed-cat"></div></div>
     <div class="grid2">
       <div class="field"><label for="ed-date">Date</label><input type="date" id="ed-date"></div>
-      <div class="field" id="ed-amt-f"><label for="ed-amt" id="ed-amt-l">Montant TTC (€)</label><input id="ed-amt" inputmode="decimal" autocomplete="off"></div>
+      <div class="field"><label for="ed-jus">Justif n°</label><input id="ed-jus" inputmode="numeric" autocomplete="off"></div>
     </div>
-    <div id="ed-cur" hidden class="msg warn"></div>
-    <div class="field"><label for="ed-lib">Libellé</label><input id="ed-lib" maxlength="60" autocomplete="off"></div>
+    <p class="hint" id="ed-jus-hint" hidden></p>
     <div class="grid2">
-      <div class="field"><label for="ed-lieu">Lieu</label><input id="ed-lieu" autocomplete="off"></div>
-      <div class="field"><label for="ed-proj">Projet (imputation)</label><select id="ed-proj"></select></div>
+      <div class="field" id="ed-amt-f"><label for="ed-amt" id="ed-amt-l">Montant TTC (€)</label><input id="ed-amt" inputmode="decimal" autocomplete="off"></div>
+      <div class="field" id="ed-ht-f"><label for="ed-ht">Montant HT (€)</label><input id="ed-ht" inputmode="decimal" autocomplete="off"></div>
     </div>
+    <p class="hint num" id="ed-tva"></p>
+    <div id="ed-cur" hidden class="msg warn"></div>
+    <div class="grid2">
+      <div class="field"><label for="ed-pre">Prestataire</label><input id="ed-pre" maxlength="60" autocomplete="off"></div>
+      <div class="field"><label for="ed-lieu">Lieu</label><input id="ed-lieu" autocomplete="off"></div>
+    </div>
+    <div class="field"><label for="ed-lib">Libellé</label><input id="ed-lib" maxlength="60" autocomplete="off"></div>
+    <div class="field"><label for="ed-proj">Projet (imputation)</label><select id="ed-proj"></select></div>
     <p class="hint" id="ed-proj-hint"></p>
     <div class="btns"><button class="btn danger" id="ed-del">Supprimer la ligne</button></div>
   </div>
@@ -302,7 +309,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.0.3';
+const APP_VERSION='1.1.0';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
@@ -375,13 +382,23 @@ const monthLines=()=>L.filter(l=>lineMonth(l)===month).sort((a,b)=>((a.date||'9'
 function kmAmount(km){if(!km)return 0;return km<=200?km*RATE1:200*RATE1+(km-200)*RATE2}
 let RATE1=0.5,RATE2=0.35;
 const lineAmount=l=>l.cat==='km'?Math.round(kmAmount(l.km||0)*100)/100:(l.montant||0);
-function justifNumbers(lines){const m=new Map();let n=0;for(const l of lines){if(l.photo)m.set(l.id,++n)}return m}
+/* Justif n° : numéro chrono attribué à la prise de la photo (suivant du mois), fixe ensuite et modifiable à la main.
+   Il est repris en colonne « Justif n° » de l'Excel, dans l'onglet Justificatifs et dans le nom des photos. */
+function justifNumbers(lines){const m=new Map();for(const l of lines)if(l.justif)m.set(l.id,l.justif);return m}
+function nextJustif(mo,exceptId){let m=0;for(const x of L)if(x.id!==exceptId&&x.justif&&lineMonth(x)===mo)m=Math.max(m,x.justif);return m+1}
+function ensureJustif(l){
+  // la ligne change de mois (date lue ou corrigée) : elle prend le numéro suivant de son nouveau mois, sauf numéro saisi à la main
+  const mo=lineMonth(l);
+  if(l.justif&&l.justifManual){l.justifMonth=mo;return}
+  if((l.photo||l.justif)&&(!l.justif||l.justifMonth!==mo)){l.justif=nextJustif(mo,l.id);l.justifMonth=mo}
+}
+function justifDuplicates(lines){const c=new Map();for(const l of lines)if(l.justif)c.set(l.justif,(c.get(l.justif)||0)+1);return new Set([...c].filter(([,n])=>n>1).map(([k])=>k))}
 
 /* ---------- rendu ---------- */
 function monthLabel(m){const [y,mo]=m.split('-').map(Number);return new Date(y,mo-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}
 function projName(code){const p=S.projets.find(p=>p.code===code);return p?p.code:(code||'')}
 function render(){
-  const ls=monthLines(); const js=justifNumbers(ls);
+  const ls=monthLines(); const js=justifNumbers(ls); const dup=justifDuplicates(ls);
   $('m-label').textContent=monthLabel(month);
   const tot=ls.reduce((s,l)=>s+lineAmount(l),0);
   $('m-total').textContent=fmtEur(tot);$('x-total').textContent=fmtEur(tot);$('x-mois').textContent=monthLabel(month);
@@ -412,7 +429,7 @@ function render(){
     const meta=document.createElement('div');meta.className='meta';
     const d=document.createElement('span');d.textContent=l.date?new Date(l.date+'T12:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}):'date ?';meta.append(d);
     const ct=document.createElement('span');ct.textContent=(CAT[l.cat]||{lab:'?'}).lab;meta.append(ct);
-    if(js.has(l.id)){const j=document.createElement('span');j.textContent='J'+js.get(l.id);meta.append(j)}
+    if(js.has(l.id)){const j=document.createElement('span');j.textContent='J'+js.get(l.id);if(dup.has(js.get(l.id))){j.className='tag warn';j.textContent+=' en double'}meta.append(j)}
     const pj=document.createElement('span');pj.className='tag'+(l.projet?'':' warn');pj.textContent=l.projet?projName(l.projet):'sans projet';meta.append(pj);
     if(l.status==='analyse'){const s=document.createElement('span');s.innerHTML='<i class="spin"></i>';meta.append(s)}
     if(l.devise&&l.devise!=='EUR'&&!l.converti){const w=document.createElement('span');w.className='tag warn';w.textContent=l.devise+' à convertir';meta.append(w)}
@@ -539,7 +556,7 @@ async function onPhoto(input){
   }
   await dbPut('photos',ph.blob,l.id);
   if(thumbs.get(l.id))URL.revokeObjectURL(thumbs.get(l.id));thumbs.set(l.id,URL.createObjectURL(ph.blob));
-  l.photo=true;l.w=ph.w;l.h=ph.h;l.status='analyse';await dbPut('lines',l);
+  l.photo=true;l.w=ph.w;l.h=ph.h;l.status='analyse';ensureJustif(l);await dbPut('lines',l);
   if(!edId||edId!==l.id)openEditor(l.id);else fillEditor(l);
   render();analyse(l.id,ph.blob);
 }
@@ -552,17 +569,19 @@ const PROMPT=`Tu lis la photo d'un ticket de caisse, d'une facture ou d'un reçu
 Remplis les champs ainsi :
 - est_justificatif : false si l'image ne montre pas de justificatif de dépense ;
 - date : date de la dépense au format AAAA-MM-JJ, chaîne vide si illisible ;
-- commercant : nom de l'enseigne ou du prestataire ;
+- prestataire : nom commercial du prestataire ou de l'enseigne tel qu'imprimé en tête du ticket ou de la facture (ex. "Brasserie Le Zinc", "SNCF Voyageurs", "Ibis Lyon Part-Dieu", "G7 Taxi") ; à défaut la raison sociale ; ne le laisse vide que si aucun nom n'est lisible ;
 - libelle : libellé court pour la note de frais, 40 caractères au plus, en français, ex. "Déjeuner – Le Zinc", "Taxi gare → hôtel", "Nuit hôtel Ibis Lyon", "Billet TGV Paris-Lyon" ;
-- lieu : ville de la dépense, chaîne vide si inconnue ;
+- lieu : ville où la dépense a été faite. Cherche-la dans l'adresse du prestataire (ville après le code postal), sinon dans le nom de l'établissement, de la gare, de l'aéroport ou du trajet (pour un trajet, ville de départ). Écris la ville seule, sans code postal, avec une majuscule (ex. "Strasbourg"). Chaîne vide seulement si rien ne permet de la trouver ;
 - montant : montant total TTC effectivement payé, avec un point décimal (ex. "23.40"), chaîne vide si illisible ;
+- montant_ht : montant total hors taxes s'il est imprimé ; s'il ne l'est pas mais que la TVA l'est, TTC moins TVA ; chaîne vide si ni l'un ni l'autre ne figure (ne le devine pas à partir d'un taux) ;
+- tva : montant total de TVA s'il est imprimé (somme des taux s'il y en a plusieurs) ; sinon TTC moins HT si les deux figurent ; chaîne vide sinon ;
 - devise : code ISO 4217 de ce montant (EUR si le symbole est €) ;
 - categorie : "voyage" (train, avion, taxi, VTC, location de véhicule, carburant, péage, parking, transports en commun), "hotel" (hébergement), "repas" (repas du salarié), "reception" (repas ou invitation avec des clients ou tiers, plusieurs couverts) ou "divers" (tout le reste) ;
 - confiance : "haute", "moyenne" ou "basse" selon la lisibilité du ticket.`;
 const SCHEMA={type:'object',additionalProperties:false,
-  required:['est_justificatif','date','commercant','libelle','lieu','montant','devise','categorie','confiance'],
-  properties:{est_justificatif:{type:'boolean'},date:{type:'string'},commercant:{type:'string'},libelle:{type:'string'},lieu:{type:'string'},
-    montant:{type:'string'},devise:{type:'string'},categorie:{type:'string',enum:['voyage','hotel','repas','reception','divers']},
+  required:['est_justificatif','date','prestataire','libelle','lieu','montant','montant_ht','tva','devise','categorie','confiance'],
+  properties:{est_justificatif:{type:'boolean'},date:{type:'string'},prestataire:{type:'string'},libelle:{type:'string'},lieu:{type:'string'},
+    montant:{type:'string'},montant_ht:{type:'string'},tva:{type:'string'},devise:{type:'string'},categorie:{type:'string',enum:['voyage','hotel','repas','reception','divers']},
     confiance:{type:'string',enum:['haute','moyenne','basse']}}};
 const MODELS={'claude-opus-5-5':'Claude Opus 5.5 (recommandé)','claude-haiku-5-5':'Claude Haiku 5.5 (environ 40 fois moins cher)'};
 let anthropicMod=null;
@@ -596,7 +615,8 @@ async function readWithClaude(blob){
   const txt=(resp.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
   let r;try{r=JSON.parse(txt)}catch(e){throw {kind:'fatal',msg:'Réponse illisible.'}}
   const m=parseNum(r.montant);
-  return {erreur:!r.est_justificatif,date:r.date,libelle:r.libelle||r.commercant,lieu:r.lieu,montant:m,devise:r.devise,categorie:r.categorie,confiance:r.confiance,source:'claude'};
+  return {erreur:!r.est_justificatif,date:r.date,prestataire:r.prestataire,libelle:r.libelle||r.prestataire,lieu:r.lieu,montant:m,
+    ht:parseNum(r.montant_ht),tva:parseNum(r.tva),devise:r.devise,categorie:r.categorie,confiance:r.confiance,source:'claude'};
 }
 
 /* --- lecture locale (hors ligne) --- */
@@ -641,8 +661,15 @@ function parseReceipt(text){
     const cv=low.match(/(\d+)\s*couverts?/);cat=cv&&+cv[1]>=3?'reception':'repas'}
   const labels={hotel:'Hôtel',voyage:'Transport',repas:'Repas',reception:'Réception',divers:'Achat'};
   const libelle=(labels[cat]+(merch?' – '+merch:'')).slice(0,40);
+  // HT et TVA : seulement s'ils sont imprimés (jamais déduits d'un taux)
+  let ht=null,tva=null;
+  for(const l of lines){const p=plain(l);
+    if(ht==null&&/(\bht\b|h\.t\.|hors\s*tax)/.test(p)&&!/ttc/.test(p)){const a=amt(l).filter(v=>montant==null||v<=montant);if(a.length)ht=Math.max(...a)}
+    if(tva==null&&/(total\s*)?t\.?v\.?a\.?/.test(p)&&!/ttc|\bht\b|n[°o]\s*tva|intracom|fr\s*\d/.test(p)){const a=amt(l).filter(v=>montant==null||v<montant);if(a.length)tva=Math.max(...a)}}
+  if(ht==null&&tva!=null&&montant!=null)ht=Math.round((montant-tva)*100)/100;
+  if(tva==null&&ht!=null&&montant!=null&&ht<montant)tva=Math.round((montant-ht)*100)/100;
   const conf=(date&&montant!=null)?'moyenne':'basse';
-  return {erreur:false,date,libelle,lieu,montant,devise,categorie:cat,confiance:conf,source:'local'};
+  return {erreur:false,date,prestataire:merch,libelle,lieu,montant,ht,tva,devise,categorie:cat,confiance:conf,source:'local'};
 }
 async function readLocally(blob){
   const w=await tessWorker();
@@ -655,10 +682,14 @@ function applyReading(cur,r){
   if(!t.date&&/^\d{4}-\d{2}-\d{2}$/.test(r.date||''))cur.date=r.date;
   if(!t.libelle&&r.libelle)cur.libelle=String(r.libelle).slice(0,60);
   if(!t.lieu&&r.lieu)cur.lieu=String(r.lieu);
+  if(!t.prestataire&&r.prestataire)cur.prestataire=String(r.prestataire).slice(0,60);
   if(!t.cat&&CAT[r.categorie]&&r.categorie!=='km')cur.cat=r.categorie;
   if(!t.montant&&typeof r.montant==='number')cur.montant=Math.round(r.montant*100)/100;
   if(!t.montant){cur.devise=(r.devise||'EUR').toUpperCase();cur.montantOrig=typeof r.montant==='number'?r.montant:null;cur.converti=cur.devise==='EUR'}
+  // HT et TVA en devise du ticket ; si le ticket n'est pas en euros, ils restent indicatifs
+  if(!t.ht){cur.ht=typeof r.ht==='number'?r.ht:null;cur.tva=typeof r.tva==='number'?r.tva:null}
   if(cur.projAuto&&!t.projet)cur.projet=defaultProject(cur.date);
+  ensureJustif(cur);
   cur.confiance=r.confiance||'';cur.source=r.source;cur.status='ok';cur.errMsg='';
 }
 async function analyse(id,blob,opts={}){
@@ -701,11 +732,13 @@ function closeEditor(){edId=null;edDraft=null;$('ed').hidden=true;document.body.
 function fillEditor(l,fromAnalyse){
   // après lecture : on ne remplace que ce que l'utilisateur n'a pas déjà touché dans l'éditeur
   if(fromAnalyse&&edDraft){
-    for(const k of ['date','libelle','lieu','cat','montant','projet','status','errMsg','confiance','photo','w','h'])if(!edDraft.touched[k])edDraft[k]=l[k];
+    for(const k of ['date','libelle','lieu','prestataire','cat','montant','projet','status','errMsg','confiance','source','pendingClaude','photo','w','h'])if(!edDraft.touched[k])edDraft[k]=l[k];
     if(!edDraft.touched.montant)for(const k of ['devise','montantOrig','converti'])edDraft[k]=l[k];
+    if(!edDraft.touched.ht){edDraft.ht=l.ht;edDraft.tva=l.tva}
+    if(!edDraft.touched.justif){edDraft.justif=l.justif;edDraft.justifMonth=l.justifMonth}
     if(!edDraft.touched.projet&&edDraft.projAuto)edDraft.projet=defaultProject(edDraft.date);
   }
-  else edDraft=edDraft&&edDraft.id===l.id&&!fromAnalyse?Object.assign(edDraft,{photo:l.photo,w:l.w,h:l.h,status:l.status}):JSON.parse(JSON.stringify(l));
+  else edDraft=edDraft&&edDraft.id===l.id&&!fromAnalyse?Object.assign(edDraft,{photo:l.photo,w:l.w,h:l.h,status:l.status},edDraft.touched.justif?{}:{justif:l.justif,justifMonth:l.justifMonth}):JSON.parse(JSON.stringify(l));
   const d=edDraft;
   $('ed-title').textContent=d.photo?'Ticket':'Ligne sans ticket';
   $('ed-photo').hidden=!d.photo;if(d.photo&&thumbs.get(d.id))$('ed-img').src=thumbs.get(d.id);
@@ -727,7 +760,15 @@ function fillEditor(l,fromAnalyse){
   const cur=$('ed-cur');
   if(!km&&d.devise&&d.devise!=='EUR'&&!d.converti){cur.hidden=false;cur.textContent=`Ticket en ${d.devise}${d.montantOrig!=null?' ('+numStr(d.montantOrig)+' '+d.devise+')':''} : saisissez le montant en euros (relevé bancaire), le libellé gardera le montant d'origine.`}
   else cur.hidden=true;
-  $('ed-lib').value=d.libelle||'';$('ed-lieu').value=d.lieu||'';
+  $('ed-lib').value=d.libelle||'';$('ed-lieu').value=d.lieu||'';$('ed-pre').value=d.prestataire||'';
+  $('ed-title').textContent=(d.photo?'Ticket':'Ligne sans ticket')+(d.justif?' · Justif n°'+d.justif:'');
+  $('ed-jus').value=d.justif||'';
+  const others=L.filter(x=>x.id!==d.id&&x.justif&&x.justif===d.justif&&lineMonth(x)===lineMonth(d));
+  $('ed-jus-hint').hidden=!others.length;$('ed-jus-hint').textContent=others.length?'Ce numéro est déjà pris ce mois-ci par « '+(others[0].libelle||'une autre ligne')+' ».':'';
+  $('ed-ht-f').hidden=km;
+  $('ed-ht').value=numStr(d.ht);
+  const tva=d.tva!=null?d.tva:(d.ht!=null&&d.montant!=null&&d.ht<=d.montant?Math.round((d.montant-d.ht)*100)/100:null);
+  $('ed-tva').textContent=km?'':(tva!=null?'TVA : '+fmtEur(tva).replace(' €',' '+(d.devise&&d.devise!=='EUR'?d.devise:'€')):'TVA : non indiquée sur le justificatif');
   fillProjSelect($('ed-proj'),d.projet,'— sans projet —');
   const dp=defaultProject(d.date);
   $('ed-proj-hint').textContent=d.projet&&d.projet===dp?'Projet par défaut'+(S.mission.code===dp&&S.mission.code!==S.hab?' (mission en cours à cette date)':'')+'. Modifiable.':(dp?'Projet par défaut à cette date : '+dp+'.':'Aucun projet par défaut. Réglez-le dans l\'onglet Projets.');
@@ -736,19 +777,27 @@ $('ed-date').onchange=e=>{edDraft.date=e.target.value;edDraft.touched.date=true;
 $('ed-amt').oninput=e=>{edDraft.touched.montant=true;if(edDraft.cat==='km'){edDraft.km=parseInt(e.target.value,10)||null}else{edDraft.montant=parseNum(e.target.value);if(edDraft.devise!=='EUR')edDraft.converti=true}};
 $('ed-lib').oninput=e=>{edDraft.libelle=e.target.value;edDraft.touched.libelle=true};
 $('ed-lieu').oninput=e=>{edDraft.lieu=e.target.value;edDraft.touched.lieu=true};
+$('ed-pre').oninput=e=>{edDraft.prestataire=e.target.value;edDraft.touched.prestataire=true};
+$('ed-ht').oninput=e=>{edDraft.ht=parseNum(e.target.value);edDraft.tva=null;edDraft.touched.ht=true;
+  const d=edDraft;$('ed-tva').textContent=d.ht!=null&&d.montant!=null&&d.ht<=d.montant?'TVA : '+fmtEur(d.montant-d.ht):'TVA : non indiquée sur le justificatif'};
+$('ed-jus').oninput=e=>{const n=parseInt(e.target.value,10);edDraft.justif=n>0?n:null;edDraft.justifManual=!!edDraft.justif;edDraft.touched.justif=true;
+  const others=L.filter(x=>x.id!==edDraft.id&&x.justif&&x.justif===edDraft.justif&&lineMonth(x)===lineMonth(edDraft));
+  $('ed-jus-hint').hidden=!others.length;$('ed-jus-hint').textContent=others.length?'Ce numéro est déjà pris ce mois-ci par « '+(others[0].libelle||'une autre ligne')+' ».':''};
 $('ed-proj').onchange=e=>{edDraft.projet=e.target.value;edDraft.touched.projet=true;edDraft.projAuto=false;fillEditor(edDraft)};
 $('ed-img').onclick=()=>$('ed-photo').classList.toggle('big');
 $('ed-shot').onclick=()=>{pendingTarget=edId;$('cam').click()};
 $('ed-pick').onclick=()=>{pendingTarget=edId;$('gal').click()};
 $('ed-reread').onclick=async()=>{const b=await dbGet('photos',edId);if(!b)return;const l=L.find(x=>x.id===edId);
-  for(const k of ['date','libelle','lieu','cat','montant'])edDraft.touched[k]=false;l.touched={};l.status='analyse';edDraft.status='analyse';await dbPut('lines',l);fillEditor(edDraft);render();analyse(l.id,b)};
+  for(const k of ['date','libelle','lieu','prestataire','cat','montant','ht'])edDraft.touched[k]=false;l.touched={};l.status='analyse';edDraft.status='analyse';await dbPut('lines',l);fillEditor(edDraft);render();analyse(l.id,b)};
 $('ed-close').onclick=()=>{const l=L.find(x=>x.id===edId);
   // une ligne neuve jamais enregistrée et vide est retirée
   if(l&&!l.saved&&!l.photo){L=L.filter(x=>x!==l);dbDel('lines',l.id)}
   closeEditor();render()};
 $('ed-save').onclick=async()=>{
   const d=edDraft;const l=L.find(x=>x.id===edId);if(!l)return closeEditor();
-  if(d.cat==='km'){d.montant=null}else{d.km=null}
+  if(d.cat==='km'){d.montant=null;d.ht=null;d.tva=null}else{d.km=null}
+  if(!d.justif){d.justifManual=false}
+  ensureJustif(d);
   if(d.devise&&d.devise!=='EUR'&&d.converti&&d.montantOrig!=null&&d.libelle&&!d.libelle.includes(d.devise))d.libelle=(d.libelle+' ('+numStr(d.montantOrig)+' '+d.devise+')').slice(0,60);
   const keep={status:l.status}; // une lecture en cours continue
   Object.assign(l,d,{touched:Object.assign({},l.touched,d.touched),saved:true},l.status==='analyse'?keep:{});
@@ -824,6 +873,42 @@ async function buildWorkbook(ctx){
   let wb=await zip.file('xl/workbook.xml').async('string');
   wb=wb.replace(/<mc:AlternateContent[\s\S]*?<\/mc:AlternateContent>/,'').replace(/<calcPr([^>]*?)\/>/,(m,a)=>`<calcPr${a.replace(/ fullCalcOnLoad="\d"/,'')} fullCalcOnLoad="1"/>`);
 
+  const extra=[]; // feuilles ajoutées au modèle : {name, path}
+  let wr=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  const addSheet=(name,path,rid)=>{
+    extra.push(name);
+    ct=ct.replace('</Types>',`<Override PartName="/xl/worksheets/${path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+    wb=wb.replace('</sheets>',`<sheet name="${name}" sheetId="${extra.length+1}" r:id="${rid}"/></sheets>`);
+    wr=wr.replace('</Relationships>',`<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/${path}"/></Relationships>`);
+  };
+
+  // Onglet « Détail » : prestataire, lieu, HT, TVA, TTC de chaque ligne (le modèle n'a pas ces colonnes), styles repris du modèle
+  {
+    const st=ref=>((sh.match(new RegExp('<c r="'+ref+'" s="(\\d+)"'))||[])[1]);
+    const sHead=st('B7'),sTxt=st('B9'),sDate=st('D9'),sNum=st('J9'),sInt=st('E9');
+    const S_=s=>s?` s="${s}"`:'';
+    const cols='ABCDEFGHIJKLM';
+    const head=['Justif n°','Date','Prestataire','Libellé','Lieu','Nature','Projet','Montant HT','TVA','Montant TTC','Devise ticket','Montant ticket','Km'];
+    const cell=(c,r,v,kind)=>{const ref=c+r;
+      if(v==null||v==='')return `<c r="${ref}"${S_(kind==='num'?sNum:kind==='date'?sDate:kind==='int'?sInt:sTxt)}/>`;
+      if(typeof v==='number')return `<c r="${ref}"${S_(kind==='date'?sDate:kind==='int'?sInt:sNum)}><v>${v}</v></c>`;
+      return `<c r="${ref}"${S_(kind==='head'?sHead:sTxt)} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`};
+    let rows=`<row r="1">${head.map((h,i)=>cell(cols[i],1,h,'head')).join('')}</row>`;
+    ctx.lines.forEach((l,i)=>{const r=i+2,km=l.cat==='km';
+      const ttc=km?Math.round(kmA(l.km||0)*100)/100:l.montant;
+      const tva=km?null:(l.tva!=null?l.tva:(l.ht!=null&&l.montant!=null&&l.ht<=l.montant?Math.round((l.montant-l.ht)*100)/100:null));
+      const foreign=l.devise&&l.devise!=='EUR';
+      const v=[l.justif||null,l.date?serial(l.date):null,l.prestataire||'',l.libelle||'',l.lieu||'',(CAT[l.cat]||{lab:''}).lab,l.projet||'',
+        km?null:(l.ht??null),tva,ttc??null,foreign?l.devise:'',foreign?(l.montantOrig??null):null,km?(l.km||null):null];
+      const kinds=['int','date','txt','txt','txt','txt','txt','num','num','num','txt','num','int'];
+      rows+=`<row r="${r}">${v.map((x,j)=>cell(cols[j],r,x,kinds[j])).join('')}</row>`});
+    const widths=[9,11,26,34,16,11,10,12,10,12,9,12,7];
+    const note=ctx.lines.some(l=>l.devise&&l.devise!=='EUR')?'HT et TVA sont dans la devise du ticket quand celui-ci n\'est pas en euros.':'';
+    if(note)rows+=`<row r="${ctx.lines.length+3}">${cell('A',ctx.lines.length+3,note,'txt')}</row>`;
+    put('xl/worksheets/sheet3.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${rows}</sheetData><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToHeight="0"/></worksheet>`);
+    addSheet('Détail','sheet3.xml','rId10');
+  }
+
   const pics=ctx.lines.filter(l=>l.justif&&l.photoBlob);
   if(pics.length){
     const EMU=12700,ROWPT=15,MAXW=12*360000,MAXH=17*360000;
@@ -831,7 +916,7 @@ async function buildWorkbook(ctx){
     for(let i=0;i<pics.length;i++){
       const p=pics[i],name='justif'+p.justif+'.jpeg';
       put('xl/media/'+name,await p.photoBlob.arrayBuffer());
-      const label=`Justificatif n°${p.justif} — ${p.date?p.date.split('-').reverse().join('/'):'date ?'} — ${p.libelle||''} — ${p.cat==='km'?(p.km||0)+' km':fmtEur(p.montant)}${p.projet?' — '+p.projet:''}`;
+      const label=`Justificatif n°${p.justif} — ${p.date?p.date.split('-').reverse().join('/'):'date ?'} — ${p.prestataire||p.libelle||''}${p.lieu?' ('+p.lieu+')':''} — ${p.cat==='km'?(p.km||0)+' km':fmtEur(p.montant)+(p.ht!=null?' TTC, '+(p.devise&&p.devise!=='EUR'?numStr(p.ht.toFixed(2))+' '+p.devise:fmtEur(p.ht))+' HT':'')}${p.projet?' — '+p.projet:''}`;
       rows+=`<row r="${row+1}"><c r="A${row+1}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(label)}</t></is></c></row>`;
       let w=p.w||1000,h=p.h||1400;const k=Math.min(MAXW/(w*9525),MAXH/(h*9525));const cx=Math.round(w*9525*k),cy=Math.round(h*9525*k);
       anchors+=`<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row+1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i+2}" name="Justificatif ${p.justif}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId${i+1}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
@@ -843,15 +928,14 @@ async function buildWorkbook(ctx){
     put('xl/drawings/drawing2.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${anchors}</xdr:wsDr>`);
     put('xl/drawings/_rels/drawing2.xml.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`);
     ct=ct.replace('<Default Extension="png"','<Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png"')
-         .replace('</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
-    wb=wb.replace('</sheets>','<sheet name="Justificatifs" sheetId="2" r:id="rId9"/></sheets>');
-    let wr=await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    wr=wr.replace('</Relationships>','<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
-    put('xl/_rels/workbook.xml.rels',wr);
-    let app=await zip.file('docProps/app.xml').async('string');
-    app=app.replace('<vt:i4>1</vt:i4>','<vt:i4>2</vt:i4>').replace('<vt:vector size="1" baseType="lpstr"><vt:lpstr>Feuil1</vt:lpstr>','<vt:vector size="2" baseType="lpstr"><vt:lpstr>Feuil1</vt:lpstr><vt:lpstr>Justificatifs</vt:lpstr>');
-    put('docProps/app.xml',app);
+         .replace('</Types>','<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+    addSheet('Justificatifs','sheet2.xml','rId9');
   }
+  put('xl/_rels/workbook.xml.rels',wr);
+  let app=await zip.file('docProps/app.xml').async('string');
+  const names=['Feuil1',...extra];
+  app=app.replace('<vt:i4>1</vt:i4>',`<vt:i4>${names.length}</vt:i4>`).replace('<vt:vector size="1" baseType="lpstr"><vt:lpstr>Feuil1</vt:lpstr></vt:vector>',`<vt:vector size="${names.length}" baseType="lpstr">${names.map(n=>`<vt:lpstr>${xmlEsc(n)}</vt:lpstr>`).join('')}</vt:vector>`);
+  put('docProps/app.xml',app);
   put('[Content_Types].xml',ct);put('xl/workbook.xml',wb);
   return zip.generateAsync({type:'blob',compression:'DEFLATE',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
 }
@@ -889,7 +973,14 @@ $('x-xlsx').onclick=async()=>{
   finally{b.disabled=false;b.textContent="Enregistrer l'Excel"}
 };
 function addPhotos(folder,pics){
-  for(const p of pics){const nm=`J${pad(p.justif)} ${p.date||'sans-date'} ${(CAT[p.cat]||{lab:''}).lab} ${(p.libelle||'').replace(/[\\/:*?"<>|]/g,'-')}`.trim().slice(0,90);folder.file(nm+'.jpg',p.photoBlob)}
+  // nom : « Justif 03 - 2026-11-14 - Brasserie Le Zinc - 31,50 EUR.jpg », le numéro en tête pour le tri
+  const clean=s=>String(s||'').replace(/[\\/:*?"<>|\r\n]/g,'-').replace(/\s+/g,' ').trim();
+  const used=new Set();
+  for(const p of pics){
+    const amt=p.cat==='km'?(p.km||0)+' km':(p.montant!=null?numStr(p.montant.toFixed(2))+' '+(p.devise&&p.devise!=='EUR'&&!p.converti?p.devise:'EUR'):'');
+    let nm=['Justif '+(p.justif?pad(p.justif):'sans n°'),p.date||'sans date',clean(p.prestataire||p.libelle)||(CAT[p.cat]||{lab:''}).lab,amt].filter(Boolean).join(' - ').slice(0,110);
+    let f=nm,k=2;while(used.has(f))f=nm+' ('+(k++)+')';used.add(f);
+    folder.file(f+'.jpg',p.photoBlob)}
 }
 $('x-zip').onclick=async()=>{
   const ctx=await exportCtx();const pics=ctx.lines.filter(l=>l.photoBlob);
@@ -1059,6 +1150,8 @@ function installHint(){
     if(l.status==='analyse'){l.status='erreur';l.errMsg='La lecture a été interrompue. Touchez « Relire le ticket ».'}}
   // lignes jamais enregistrées sans photo : retirées
   L=L.filter(l=>l.saved||l.photo);
+  // lignes d'avant la 1.1 : numéro chrono attribué dans l'ordre de saisie
+  for(const l of [...L].sort((a,b)=>a.created.localeCompare(b.created)))if(l.photo&&!l.justif){ensureJustif(l);try{await dbPut('lines',l)}catch(e){}}
   await loadNote();render();renderExport();renderNet();
   $('app-ver').textContent='Version '+APP_VERSION+(window.matchMedia('(display-mode: standalone)').matches||navigator.standalone?' · installée':'');
   if('serviceWorker' in navigator){try{await navigator.serviceWorker.register('sw.js')}catch(e){}}
