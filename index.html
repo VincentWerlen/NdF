@@ -262,10 +262,14 @@ a.btn{text-decoration:none;color:inherit}
     </div>
     <div class="card">
       <h2>Lecture des tickets</h2>
-      <p class="hint">Avec une clé API Claude, chaque photo est lue par Claude dès qu'il y a du réseau. Sans clé ou hors ligne, l'appli lit le texte du ticket sur le téléphone (moins fiable : vérifiez date et montant), puis le fait relire par Claude au retour du réseau.</p>
-      <div class="field"><label for="s-key">Clé API Claude (console.anthropic.com)</label><input id="s-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"></div>
-      <div class="field"><label for="s-model">Modèle</label><select id="s-model"></select></div>
-      <p class="hint">La clé reste sur ce téléphone et n'est envoyée qu'à api.anthropic.com. Prenez une clé dédiée à cette appli, avec une limite de dépense. Compter environ 1 à 2 centimes par ticket avec Opus 5.5.</p>
+      <p class="hint">Avec une clé (Mistral ou Claude), chaque photo est lue en ligne dès qu'il y a du réseau. Sans clé ou hors ligne, l'appli lit le texte du ticket sur le téléphone (moins fiable : vérifiez), puis le fait relire en ligne au retour du réseau.</p>
+      <div class="field"><label for="s-prov">Service</label><select id="s-prov">
+        <option value="mistral">Mistral (offre gratuite)</option><option value="claude">Claude (payant, quelques centimes)</option><option value="local">Téléphone seulement (gratuit, hors ligne)</option></select></div>
+      <div id="s-keybox">
+        <div class="field"><label for="s-key" id="s-key-l">Clé API</label><input id="s-key" type="password" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label for="s-model">Modèle</label><select id="s-model"></select></div>
+        <p class="hint" id="s-prov-hint"></p>
+      </div>
       <div class="btns"><button class="btn" id="s-key-test">Tester la clé</button><button class="btn" id="s-key-del">Effacer la clé</button></div>
       <div id="s-net" class="status"></div>
     </div>
@@ -334,7 +338,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.3.1';
+const APP_VERSION='1.4.0';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
@@ -658,6 +662,12 @@ const SCHEMA={type:'object',additionalProperties:false,
     total_ht:{type:'string'},total_tva:{type:'string'},devise:{type:'string'},categorie:{type:'string',enum:['voyage','hotel','repas','reception','divers']},
     confiance:{type:'string',enum:['haute','moyenne','basse']}}};
 const MODELS={'claude-opus-5-5':'Claude Opus 5.5 (recommandé)','claude-haiku-5-5':'Claude Haiku 5.5 (environ 40 fois moins cher)'};
+const MISTRAL_MODELS={'mistral-small-latest':'Mistral Small, lecture complète par l\'IA (recommandé)','mistral-ocr-latest':'Mistral OCR, texte seul + règles de l\'appli (selon Mistral, jamais utilisé pour l\'entraînement)'};
+// réglages de lecture (les versions ≤ 1.3 n'avaient que la clé Claude)
+function prov(){return S.provider||(S.apiKey?'claude':'local')}
+function provKey(){const p=prov();return p==='claude'?S.apiKey:p==='mistral'?S.mistralKey:''}
+const PROV_NAME={claude:'Claude',mistral:'Mistral',local:'le téléphone'};
+async function readOnline(blob){return prov()==='mistral'?readWithMistral(blob):readWithClaude(blob)}
 let anthropicMod=null;
 async function claudeClient(){
   if(!anthropicMod)anthropicMod=(await import('./vendor/anthropic.mjs')).default;
@@ -688,12 +698,55 @@ async function readWithClaude(blob){
   if(resp.stop_reason==='refusal')throw {kind:'fatal',msg:'Claude a refusé de lire cette image.'};
   const txt=(resp.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
   let r;try{r=JSON.parse(txt)}catch(e){throw {kind:'fatal',msg:'Réponse illisible.'}}
-  const m=parseNum(r.montant);
-  // les lignes du tableau de TVA sont revérifiées ici : taxe ≈ base × taux, colonnes remises dans l'ordre si besoin
-  const rows=(r.ventilation_tva||[]).map(x=>vatRow(parseNum(x.taux),[parseNum(x.base_ht),parseNum(x.montant_tva)].filter(v=>v!=null),parseNum(x.montant_tva)));
-  const vat=resolveVat(m,{rows,totalHT:parseNum(r.total_ht),totalTVA:parseNum(r.total_tva)});
-  return {erreur:!r.est_justificatif,date:r.date,prestataire:r.prestataire,libelle:r.libelle||r.prestataire,lieu:r.lieu,montant:m,
-    ht:vat.ht,tva:vat.tva,taux:vat.taux,horsTva:vat.horsTva,vatDoute:vat.doute,devise:r.devise,categorie:r.categorie,confiance:r.confiance,source:'claude'};
+  return fromStructured(r,'claude');
+}
+// réponse structurée (Claude ou Mistral) → champs de la ligne ; HT / TVA revérifiés par resolveVat
+function fromStructured(r,source){
+  const str=v=>v==null?'':String(v);
+  const m=parseNum(str(r.montant));
+  const rows=(Array.isArray(r.ventilation_tva)?r.ventilation_tva:[]).map(x=>vatRow(parseNum(str(x.taux).replace('%','')),[parseNum(str(x.base_ht)),parseNum(str(x.montant_tva))].filter(v=>v!=null),parseNum(str(x.montant_tva))));
+  const vat=resolveVat(m,{rows,totalHT:parseNum(str(r.total_ht)),totalTVA:parseNum(str(r.total_tva))});
+  return {erreur:r.est_justificatif===false,date:str(r.date),prestataire:str(r.prestataire),libelle:str(r.libelle)||str(r.prestataire),lieu:str(r.lieu),montant:m,
+    ht:vat.ht,tva:vat.tva,taux:vat.taux,horsTva:vat.horsTva,vatDoute:vat.doute,devise:str(r.devise)||'EUR',categorie:str(r.categorie),confiance:str(r.confiance),source};
+}
+
+/* --- lecture par Mistral (appel direct depuis le téléphone, l'API Mistral autorise les pages web) ---
+   mistral-small-latest : l'IA lit la photo et rend le JSON décrit ci-dessous (même consigne que Claude).
+   mistral-ocr-latest : service OCR (texte du ticket), puis les règles de l'appli ; selon Mistral, ces données ne servent pas à l'entraînement. */
+const MISTRAL_JSON=`
+
+Réponds uniquement par un objet JSON (sans texte autour) avec exactement ces clés :
+{"est_justificatif": true ou false, "date": "", "prestataire": "", "libelle": "", "lieu": "", "montant": "",
+ "ventilation_tva": [{"taux": "", "base_ht": "", "montant_tva": ""}], "total_ht": "", "total_tva": "", "devise": "",
+ "categorie": "voyage|hotel|repas|reception|divers", "confiance": "haute|moyenne|basse"}
+Toutes les valeurs sont des chaînes, sauf est_justificatif (booléen) et ventilation_tva (liste, vide si aucune TVA).`;
+async function mistralFetch(path,body){
+  let res;
+  try{res=await fetch('https://api.mistral.ai/v1/'+path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.mistralKey},body:JSON.stringify(body)})}
+  catch(e){throw {kind:'offline',msg:'Pas de connexion à Mistral.'}}
+  if(res.ok)return res.json();
+  let detail='';try{const j=await res.json();detail=(j.message||j.detail||j.error&&j.error.message||'');if(typeof detail!=='string')detail=JSON.stringify(detail)}catch(e){}
+  if(res.status===401)throw {kind:'auth',msg:'Clé Mistral refusée. Vérifiez-la dans l\'onglet Export → Lecture des tickets.'};
+  if(res.status===403)throw {kind:'auth',msg:'Cette clé Mistral n\'a pas accès à ce service ('+detail.slice(0,120)+').'};
+  if(res.status===429)throw {kind:'retry',msg:'Limite de l\'offre Mistral atteinte pour le moment. Réessayez dans une minute.'};
+  if(res.status>=500)throw {kind:'retry',msg:'Mistral momentanément indisponible ('+res.status+').'};
+  throw {kind:'fatal',msg:'Demande refusée par Mistral ('+res.status+') : '+detail.slice(0,160)};
+}
+async function readWithMistral(blob){
+  const url='data:image/jpeg;base64,'+await blobToB64(blob);
+  const model=S.mistralModel||'mistral-small-latest';
+  if(model==='mistral-ocr-latest'){
+    const j=await mistralFetch('ocr',{model,document:{type:'image_url',image_url:url},include_image_base64:false});
+    const text=(j.pages||[]).map(p=>p.markdown||'').join('\n').replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/[|#*]/g,' ');
+    if(!text.trim())throw {kind:'fatal',msg:'Mistral OCR n\'a trouvé aucun texte sur la photo.'};
+    return Object.assign(parseReceipt(text),{source:'mistral'});
+  }
+  const j=await mistralFetch('chat/completions',{model,temperature:0,response_format:{type:'json_object'},
+    messages:[{role:'user',content:[{type:'text',text:PROMPT+MISTRAL_JSON},{type:'image_url',image_url:url}]}]});
+  const c=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content;
+  const txt=Array.isArray(c)?c.map(x=>x.text||'').join(''):String(c||'');
+  let r;try{r=JSON.parse(txt.replace(/^```(?:json)?\s*|\s*```$/g,''))}catch(e){throw {kind:'fatal',msg:'Réponse de Mistral illisible.'}}
+  return fromStructured(r,'mistral');
 }
 
 /* --- HT / TVA : contrôle commun aux deux lectures ---
@@ -788,16 +841,25 @@ function parseReceipt(text){
   };
   const cpIdx=lines.findIndex(l=>/\b\d{5}\b\s+\p{L}{3,}/u.test(l));
   const zone=lines.slice(0,Math.min(8,cpIdx>0?cpIdx:8));
-  const merch=(zone.find(looksLikeName)||'').replace(/[^\p{L}\p{N} '&\-.]/gu,'').replace(/\s+/g,' ').trim().slice(0,40);
+  // nettoyage : bruit OCR en fin de ligne (« p- », « | ») retiré
+  const merch=(zone.find(looksLikeName)||'').replace(/[^\p{L}\p{N} '&\-.]/gu,'').replace(/\s+/g,' ').trim()
+    .split(' ').filter((w,i,a)=>!(i===a.length-1&&!/^\p{L}[\p{L}'\-]{2,}$|^(de|du|la|le)$/iu.test(w))).join(' ').slice(0,40);
   // ville : après un code postal
-  let lieu='';const cp=raw.match(/\b\d{5}\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ' \-]{2,30})/);if(cp)lieu=cp[1].trim().split(/\s{2,}/)[0];
-  lieu=lieu?lieu.charAt(0)+lieu.slice(1).toLowerCase():'';
+  // (majuscules ou minuscules, sur la même ligne que le code postal : « 75009 paris », « 67000 STRASBOURG CEDEX »)
+  let lieu='';const cp=raw.match(/\b\d{5}[ \t]+(\p{L}[\p{L}' \-]{1,30})/u);
+  if(cp)lieu=cp[1].trim().split(/\s{2,}/)[0].replace(/\s+cedex.*$/i,'').trim();
+  lieu=lieu.toLowerCase().replace(/(^|[\s\-'])\p{L}/gu,c=>c.toUpperCase());
   // nature
+  // mots entiers seulement (« emporTER » n'est pas le train TER) ; la nature qui a le plus d'indices l'emporte
+  const KW={
+    hotel:/\b(hotel|ibis|novotel|mercure|campanile|kyriad|b&b|nuitee|nuitees|chambre|hebergement|airbnb|taxe de sejour)\b/g,
+    voyage:/\b(sncf|tgv|ouigo|ter|billet|taxi|uber|g7|bolt|heetch|peage|autoroute|sanef|aprr|parking|indigo|effia|carburant|gazole|gasoil|sp95|sp98|e10|diesel|esso|shell|totalenergies|station service|avis|hertz|europcar|sixt|ratp|navigo|metro|air france|easyjet|transavia|vol|bus|tram)\b/g,
+    repas:/\b(restaurant|brasserie|bistro|bistrot|cafe|cafes|expresso|espresso|cappuccino|menu|plat|plats|dessert|boisson|couvert|couverts|boulangerie|patisserie|viennoiserie|pain|choco|croissant|financier|sandwich|pizza|pizzeria|sushi|burger|mcdonald|kfc|traiteur|dejeuner|diner|emporter|sur place|salade|biere|vin|eau)\b/g};
+  const score=Object.fromEntries(Object.entries(KW).map(([k,re])=>[k,(low.match(re)||[]).length]));
   let cat='divers';
-  if(/hotel|ibis|novotel|mercure|campanile|kyriad|b&b|nuitee|chambre|hebergement|airbnb|taxe de sejour/.test(low))cat='hotel';
-  else if(/sncf|tgv|ouigo|ter\b|billet|taxi|uber|g7|bolt|heetch|peage|autoroute|sanef|aprr|vinci autoroutes|parking|indigo|effia|carburant|gazole|gasoil|sp95|sp98|e10|diesel|esso|shell|totalenergies|station|avis|hertz|europcar|sixt|ratp|navigo|metro|air france|easyjet|transavia|vol\b/.test(low))cat='voyage';
-  else if(/restaurant|brasserie|bistro|cafe|menu|plat|dessert|boisson|couverts?|boulangerie|pizz|sushi|burger|mcdonald|kfc|traiteur|table/.test(low)){
-    const cv=low.match(/(\d+)\s*couverts?/);cat=cv&&+cv[1]>=3?'reception':'repas'}
+  const best=Object.entries(score).sort((a,b)=>b[1]-a[1])[0];
+  if(best[1]>0)cat=best[0];
+  if(cat==='repas'){const cv=low.match(/(\d+)\s*couverts?/);if(cv&&+cv[1]>=3)cat='reception'}
   const labels={hotel:'Hôtel',voyage:'Transport',repas:'Repas',reception:'Réception',divers:'Achat'};
   const libelle=(labels[cat]+(merch?' – '+merch:'')).slice(0,40);
   // HT / TVA : lignes du tableau de TVA (un taux français + des montants), puis lignes de totaux ; contrôle par resolveVat
@@ -838,14 +900,14 @@ function applyReading(cur,r){
 }
 async function analyse(id,blob,opts={}){
   const l=L.find(x=>x.id===id);if(!l)return;
-  const useClaude=S.apiKey&&navigator.onLine&&!opts.localOnly;
+  const useClaude=prov()!=='local'&&provKey()&&navigator.onLine&&!opts.localOnly;
   let r=null,err=null;
-  if(useClaude){try{r=await readWithClaude(blob)}catch(e){err=e}}
+  if(useClaude){try{r=await readOnline(blob)}catch(e){err=e}}
   if(!r&&(!useClaude||(err&&err.kind==='offline'))){
-    try{r=await readLocally(blob);if(S.apiKey)r.pendingClaude=true}catch(e){err=err||{kind:'fatal',msg:'La lecture locale a échoué : '+(e&&e.message||e)}}
+    try{r=await readLocally(blob);if(prov()!=='local'&&provKey())r.pendingClaude=true}catch(e){err=err||{kind:'fatal',msg:'La lecture locale a échoué : '+(e&&e.message||e)}}
   }
   const cur=L.find(x=>x.id===id);if(!cur)return;
-  if(r&&r.erreur){cur.status='erreur';cur.errMsg="Claude n'a pas reconnu de justificatif sur cette photo.";cur.pendingClaude=false}
+  if(r&&r.erreur){cur.status='erreur';cur.errMsg="Aucun justificatif reconnu sur cette photo.";cur.pendingClaude=false}
   else if(r){applyReading(cur,r);cur.pendingClaude=!!r.pendingClaude}
   else{cur.status='erreur';cur.errMsg=(err&&err.msg||'La lecture a échoué.')+' Vous pouvez relancer « Relire le ticket » ou saisir à la main.';cur.pendingClaude=!!(err&&err.kind==='retry')}
   await dbPut('lines',cur);refresh(cur);
@@ -853,10 +915,10 @@ async function analyse(id,blob,opts={}){
 // au retour du réseau : relecture par Claude des tickets lus hors ligne
 let relayRunning=false;
 async function relirePendants(){
-  if(relayRunning||!S.apiKey||!navigator.onLine)return;relayRunning=true;
+  if(relayRunning||prov()==='local'||!provKey()||!navigator.onLine)return;relayRunning=true;
   try{for(const l of L.filter(x=>x.pendingClaude&&x.photo&&x.status!=='analyse')){
     const b=await dbGet('photos',l.id);if(!b)continue;
-    try{const r=await readWithClaude(b);const cur=L.find(x=>x.id===l.id);if(!cur)continue;
+    try{const r=await readOnline(b);const cur=L.find(x=>x.id===l.id);if(!cur)continue;
       if(!r.erreur)applyReading(cur,r);cur.pendingClaude=false;await dbPut('lines',cur);refresh(cur)}
     catch(e){if(e.kind!=='retry'){const cur=L.find(x=>x.id===l.id);if(cur){cur.pendingClaude=e.kind==='offline';await dbPut('lines',cur)}}break}
   }}finally{relayRunning=false}
@@ -890,8 +952,8 @@ function fillEditor(l,fromAnalyse){
   const st=$('ed-status');st.hidden=false;st.className='status';
   if(d.status==='analyse')st.innerHTML='<i class="spin"></i> Lecture du ticket…';
   else if(d.status==='erreur'){st.className='msg bad';st.textContent=d.errMsg||'La lecture a échoué.'}
-  else if(d.status==='ok'&&d.source==='local'){st.className='msg warn';st.textContent='Lu sur le téléphone, sans réseau : vérifiez la date et le montant.'+(d.pendingClaude?' Le ticket sera relu par Claude au retour du réseau (vos corrections sont gardées).':'')}
-  else if(d.status==='ok'){st.innerHTML='';const s=document.createElement('span');s.textContent='Lu par Claude'+(d.confiance&&d.confiance!=='haute'?' (confiance '+d.confiance+') — vérifiez les montants':' — vérifiez avant d\'enregistrer');st.append(s)}
+  else if(d.status==='ok'&&d.source==='local'){st.className='msg warn';st.textContent='Lu sur le téléphone, sans réseau : vérifiez la date et le montant.'+(d.pendingClaude?' Le ticket sera relu en ligne au retour du réseau (vos corrections sont gardées).':'')}
+  else if(d.status==='ok'){st.innerHTML='';const s=document.createElement('span');s.textContent='Lu par '+(PROV_NAME[d.source]||'Claude')+(d.confiance&&d.confiance!=='haute'?' (confiance '+d.confiance+') — vérifiez les montants':' — vérifiez avant d\'enregistrer');st.append(s)}
   else st.hidden=true;
   const seg=$('ed-cat');seg.innerHTML='';
   for(const c of CATS){const b=document.createElement('button');b.type='button';b.textContent=c.lab;b.setAttribute('aria-pressed',d.cat===c.k);
@@ -1253,23 +1315,37 @@ copyBtn('m-cto','m-to','Copier les destinataires');copyBtn('m-csub','m-sub','Cop
 
 /* ---------- réglages de lecture ---------- */
 function renderReading(){
-  $('s-key').value=S.apiKey||'';
+  const p=prov();$('s-prov').value=p;$('s-keybox').hidden=p==='local';
+  $('s-key').value=provKey()||'';
+  $('s-key-l').textContent=p==='mistral'?'Clé API Mistral (console.mistral.ai)':'Clé API Claude (console.anthropic.com)';
+  $('s-key').placeholder=p==='mistral'?'clé Mistral':'sk-ant-…';
   const sel=$('s-model');sel.innerHTML='';
-  for(const [id,lab] of Object.entries(MODELS)){const o=document.createElement('option');o.value=id;o.textContent=lab;sel.append(o)}
-  sel.value=S.model||'claude-opus-5-5';
+  for(const [id,lab] of Object.entries(p==='mistral'?MISTRAL_MODELS:MODELS)){const o=document.createElement('option');o.value=id;o.textContent=lab;sel.append(o)}
+  sel.value=p==='mistral'?(S.mistralModel||'mistral-small-latest'):(S.model||'claude-opus-5-5');
+  $('s-prov-hint').textContent=p==='mistral'
+    ?"Offre gratuite Mistral (« Experiment ») : sans carte bancaire, débit limité. Sur cette offre, Mistral peut utiliser les demandes pour entraîner ses modèles : désactivez-le dans console.mistral.ai → Privacy, ou choisissez « Mistral OCR ». La clé reste sur ce téléphone et n'est envoyée qu'à api.mistral.ai."
+    :"La clé reste sur ce téléphone et n'est envoyée qu'à api.anthropic.com. Prenez une clé dédiée à cette appli, avec une limite de dépense. Compter 2 à 3 centimes par ticket avec Opus 5.5, bien moins avec Haiku.";
 }
 function renderNet(){
   const e=$('s-net');if(!e)return;
   const n=L.filter(l=>l.pendingClaude).length;
-  e.textContent=(navigator.onLine?'En ligne':'Hors ligne')+' · '+(S.apiKey?'lecture par Claude':'lecture sur le téléphone (pas de clé)')+(n?` · ${n} ticket(s) à relire par Claude`:'');
+  const p=prov(),on=p!=='local'&&provKey();
+  e.textContent=(navigator.onLine?'En ligne':'Hors ligne')+' · '+(on?'lecture par '+PROV_NAME[p]:p==='local'?'lecture sur le téléphone':'lecture sur le téléphone (pas de clé)')+(n&&on?` · ${n} ticket(s) à relire par ${PROV_NAME[p]}`:'');
 }
-$('s-key').onchange=async e=>{S.apiKey=e.target.value.trim();await saveSettings();renderNet();relirePendants()};
-$('s-model').onchange=async e=>{S.model=e.target.value;await saveSettings()};
-$('s-key-del').onclick=async()=>{S.apiKey='';$('s-key').value='';await saveSettings();renderNet();toast('Clé effacée de ce téléphone')};
+$('s-prov').onchange=async e=>{S.provider=e.target.value;await saveSettings();renderReading();renderNet();relirePendants()};
+$('s-key').onchange=async e=>{const v=e.target.value.trim();if(prov()==='mistral')S.mistralKey=v;else S.apiKey=v;await saveSettings();renderNet();relirePendants()};
+$('s-model').onchange=async e=>{if(prov()==='mistral')S.mistralModel=e.target.value;else S.model=e.target.value;await saveSettings()};
+$('s-key-del').onclick=async()=>{if(prov()==='mistral')S.mistralKey='';else S.apiKey='';$('s-key').value='';await saveSettings();renderNet();toast('Clé effacée de ce téléphone')};
 $('s-key-test').onclick=async()=>{
-  const b=$('s-key-test');if(!S.apiKey){toast('Saisissez d\'abord une clé');return}
+  const b=$('s-key-test');if(!provKey()){toast('Saisissez d\'abord une clé');return}
   if(!navigator.onLine){toast('Pas de réseau');return}
   b.disabled=true;b.textContent='Test…';
+  if(prov()==='mistral'){
+    try{const r=await fetch('https://api.mistral.ai/v1/models',{headers:{'Authorization':'Bearer '+S.mistralKey}});
+      toast(r.ok?'Clé Mistral valide':r.status===401?'Clé Mistral refusée':'Test impossible ('+r.status+')')}
+    catch(e){toast('Mistral injoignable')}finally{b.disabled=false;b.textContent='Tester la clé'}
+    return;
+  }
   try{const {client}=await claudeClient();await client.models.retrieve(S.model||'claude-opus-5-5');toast('Clé valide');}
   catch(e){toast(e&&e.status===401?'Clé refusée':e&&e.status===403?'Clé sans accès à ce modèle':'Test impossible : '+(e&&e.message||e).toString().slice(0,80))}
   finally{b.disabled=false;b.textContent='Tester la clé'}
@@ -1281,7 +1357,7 @@ function bmsg(t,cls){const m=$('b-msg');m.hidden=!t;m.className='msg'+(cls?' '+c
 $('b-save').onclick=async()=>{
   const z=new JSZip();const notes={};
   for(const k of await dbKeys('kv'))if(String(k).startsWith('note:'))notes[k]=await dbGet('kv',k);
-  const settings=Object.assign({},S);delete settings.apiKey;
+  const settings=Object.assign({},S);delete settings.apiKey;delete settings.mistralKey;
   const lines=await dbAll('lines');
   z.file('donnees.json',JSON.stringify({app:'notes-de-frais',version:1,date:new Date().toISOString(),settings,notes,lines},null,1));
   for(const l of lines)if(l.photo){const b=await dbGet('photos',l.id);if(b)z.file('photos/'+l.id+'.jpg',b)}
@@ -1297,7 +1373,7 @@ $('b-file').onchange=async e=>{
     // fusion : les projets s'ajoutent, les lignes de même identifiant sont remplacées, la clé API actuelle est gardée
     const s=d.settings||{};const codes=new Set(S.projets.map(p=>p.code));
     for(const p of s.projets||[])if(!codes.has(p.code))S.projets.push(p);
-    for(const k of ['nom','tri','hab','mailCpt','mailDg','model','vehicule'])if(!S[k]&&s[k])S[k]=s[k];
+    for(const k of ['nom','tri','hab','mailCpt','mailDg','model','vehicule','provider','mistralModel'])if(!S[k]&&s[k])S[k]=s[k];
     if(!S.mission.code&&s.mission)S.mission=s.mission;
     await saveSettings();
     for(const [k,v] of Object.entries(d.notes||{}))await dbPut('kv',v,k);
