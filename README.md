@@ -12,7 +12,7 @@ Les données (lignes, photos, clé API) restent dans le navigateur du téléphon
 
 ## Mise à jour
 
-Après toute modification, incrémenter `VERSION` dans `sw.js` (et `APP_VERSION` dans `index.html`) pour que les téléphones prennent la nouvelle version.
+La page est servie « réseau d'abord » : une modification de `index.html` arrive à la prochaine ouverture en ligne. Incrémenter `VERSION` dans `sw.js` (et `APP_VERSION` dans `index.html`) à chaque publication, obligatoirement si une bibliothèque de `vendor/` change.
 
 ## Bibliothèques embarquées
 
