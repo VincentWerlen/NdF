@@ -203,6 +203,18 @@ a.btn{text-decoration:none;color:inherit}
       <p class="hint" id="s-nom-hint">Modifiable à tout moment ; retenu sur ce téléphone pour les prochains exports.</p>
     </div>
     <div class="card">
+      <h2>Véhicule (indemnités kilométriques)</h2>
+      <p class="hint">Barème kilométrique officiel des voitures (repris par l'URSSAF comme plafond d'exonération), selon la puissance fiscale et les km professionnels cumulés de l'année.</p>
+      <div class="grid2">
+        <div class="field"><label for="v-cv">Puissance fiscale (carte grise, case P.6)</label><select id="v-cv">
+          <option value="">— à choisir —</option><option value="3">3 CV et moins</option><option value="4">4 CV</option><option value="5">5 CV</option><option value="6">6 CV</option><option value="7">7 CV et plus</option></select></div>
+        <div class="field"><label for="v-elec">Motorisation</label><select id="v-elec">
+          <option value="0">Thermique ou hybride</option><option value="1">100 % électrique (+20 %)</option></select></div>
+      </div>
+      <div class="field"><label for="v-deja" id="v-deja-l">Km professionnels déjà parcourus cette année, hors appli</label><input id="v-deja" inputmode="numeric" autocomplete="off" placeholder="0"></div>
+      <p class="hint" id="v-info"></p>
+    </div>
+    <div class="card">
       <h2>Cadre de droite</h2>
       <div class="grid2">
         <div class="field"><label for="n-ach">Achats divers (€)</label><input id="n-ach" inputmode="decimal"></div>
@@ -322,7 +334,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.2.1';
+const APP_VERSION='1.3.0';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
@@ -392,9 +404,28 @@ function defaultProject(dateISO){
 }
 const lineMonth=l=>(l.date||l.created.slice(0,10)).slice(0,7);
 const monthLines=()=>L.filter(l=>lineMonth(l)===month).sort((a,b)=>((a.date||'9')+a.created).localeCompare((b.date||'9')+b.created));
-function kmAmount(km){if(!km)return 0;return km<=200?km*RATE1:200*RATE1+(km-200)*RATE2}
-let RATE1=0.5,RATE2=0.35;
-const lineAmount=l=>l.cat==='km'?Math.round(kmAmount(l.km||0)*100)/100:(l.montant||0);
+/* Indemnités kilométriques : barème fiscal des voitures, repris par l'URSSAF comme plafond d'exonération.
+   Barème 2026 (revenus 2025), identique à 2025 ; +20 % pour une voiture 100 % électrique.
+   d = km professionnels de l'ANNÉE : chaque trajet vaut A(cumul après) − A(cumul avant),
+   si bien que la somme des trajets de l'année redonne exactement le barème, tranches comprises.
+   À mettre à jour chaque année à la parution du barème (février) : BAREME ci-dessous. */
+const BAREME={annee:'2026',source:'barème fiscal 2026 (revenus 2025)',elec:1.2,
+  voitures:{3:[0.529,0.316,1065,0.370],4:[0.606,0.340,1330,0.407],5:[0.636,0.357,1395,0.427],6:[0.665,0.374,1457,0.447],7:[0.697,0.394,1515,0.470]}};
+const CV_LAB={3:'3 CV et moins',4:'4 CV',5:'5 CV',6:'6 CV',7:'7 CV et plus'};
+function veh(){return Object.assign({cv:'',electrique:false,deja:{}},S.vehicule||{})}
+function baremeA(D){const v=veh(),k=BAREME.voitures[v.cv];if(!k)return null;const [a,b,c,e]=k;
+  return (D<=5000?D*a:D<=20000?D*b+c:D*e)*(v.electrique?BAREME.elec:1)}
+const kmYear=l=>(l.date||l.created||'').slice(0,4);
+const kmKey=l=>(l.date||(l.created||'').slice(0,10))+(l.created||'');
+function kmCumulBefore(l){
+  const y=kmYear(l);let s=Number(veh().deja[y]||0);
+  for(const x of L)if(x.id!==l.id&&x.cat==='km'&&x.km&&kmYear(x)===y&&kmKey(x)<kmKey(l))s+=x.km;
+  return s;
+}
+function kmEur(l){if(!l.km)return 0;const s=kmCumulBefore(l),a=baremeA(s),b=baremeA(s+l.km);return a==null?null:Math.round((b-a)*100)/100}
+function kmTranche(D){return D<=5000?"jusqu'à 5 000 km":D<=20000?'de 5 001 à 20 000 km':'au-delà de 20 000 km'}
+function kmRateNow(D){const v=veh(),k=BAREME.voitures[v.cv];if(!k)return null;const f=v.electrique?BAREME.elec:1;return (D<5000?k[0]:D<20000?k[1]:k[3])*f}
+const lineAmount=l=>l.cat==='km'?(kmEur(l)||0):(l.montant||0);
 /* Justif n° : numéro chrono attribué à la prise de la photo (suivant du mois), fixe ensuite et modifiable à la main.
    Il est repris en colonne « Justif n° » de l'Excel, dans l'onglet Justificatifs et dans le nom des photos. */
 function justifNumbers(lines){const m=new Map();for(const l of lines)if(l.justif)m.set(l.id,l.justif);return m}
@@ -459,7 +490,7 @@ function render(){
     mid.append(lib,meta);
     const a=document.createElement('div');a.className='amt';
     a.innerHTML='<div class="num"></div>';a.firstChild.textContent=l.cat==='km'?(l.km||0)+' km':fmtEur(l.montant);
-    if(l.cat==='km'){const s=document.createElement('div');s.className='meta num';s.textContent=fmtEur(lineAmount(l));a.append(s)}
+    if(l.cat==='km'){const s=document.createElement('div');s.className='meta num';const e=kmEur(l);s.textContent=e==null?'CV ?':fmtEur(e);if(e==null)s.className='tag warn';a.append(s)}
     b.append(th,mid,a);list.append(b);
   }
 }
@@ -491,7 +522,22 @@ function renderProjects(){
     r.append(c,n,del);box.append(r);
   });
 }
+function renderVehicle(){
+  const v=veh(),y=month.slice(0,4);
+  $('v-cv').value=v.cv?String(v.cv):'';$('v-elec').value=v.electrique?'1':'0';
+  $('v-deja-l').textContent='Km professionnels déjà parcourus en '+y+', hors appli';$('v-deja').value=v.deja[y]||'';
+  const inApp=L.filter(l=>l.cat==='km'&&l.km&&kmYear(l)===y).reduce((s,l)=>s+l.km,0),tot=inApp+Number(v.deja[y]||0);
+  $('v-info').textContent=!v.cv?'Puissance fiscale à choisir : sans elle, les trajets en km ne sont pas valorisés.'
+    :`${y} : ${tot.toLocaleString('fr-FR')} km pro (dont ${inApp.toLocaleString('fr-FR')} saisis dans l'appli) — tranche ${kmTranche(tot||1)}, ${numStr(kmRateNow(tot).toFixed(3))} €/km pour les prochains km.`;
+}
+async function vehChanged(){
+  const v=veh(),y=month.slice(0,4);v.cv=$('v-cv').value?Number($('v-cv').value):'';v.electrique=$('v-elec').value==='1';
+  const d=parseInt($('v-deja').value,10);if(d>0)v.deja[y]=d;else delete v.deja[y];
+  S.vehicule=v;await saveSettings();renderVehicle();render();updNet();
+}
+$('v-cv').onchange=vehChanged;$('v-elec').onchange=vehChanged;$('v-deja').onchange=vehChanged;
 function renderExport(){
+  renderVehicle();
   $('s-nom').value=S.nom||'';$('s-tri').value=S.tri||'';renderReading();renderNet();
   $('s-mcpt').value=S.mailCpt||'';$('s-mdg').value=S.mailDg||'';$('m-pack').textContent=baseName()+'.xlsx et '+baseName()+' justificatifs.zip';
   packs=null;
@@ -865,14 +911,14 @@ function fillEditor(l,fromAnalyse){
   $('ed-ht-f').hidden=km;
   $('ed-ht').value=numStr(d.ht);
   const tva=d.tva!=null?d.tva:(d.ht!=null&&d.montant!=null&&d.ht<=d.montant?Math.round((d.montant-d.ht)*100)/100:null);
-  $('ed-tva').textContent=km?'':tvaText(d,tva);
+  $('ed-tva').textContent=km?ikText(d):tvaText(d,tva);
   $('ed-tva').className='hint num'+(d.vatDoute&&tva==null?' msg warn':'');
   fillProjSelect($('ed-proj'),d.projet,'— sans projet —');
   const dp=defaultProject(d.date);
   $('ed-proj-hint').textContent=d.projet&&d.projet===dp?'Projet par défaut'+(S.mission.code===dp&&S.mission.code!==S.hab?' (mission en cours à cette date)':'')+'. Modifiable.':(dp?'Projet par défaut à cette date : '+dp+'.':'Aucun projet par défaut. Réglez-le dans l\'onglet Projets.');
 }
 $('ed-date').onchange=e=>{edDraft.date=e.target.value;edDraft.touched.date=true;if(!edDraft.touched.projet&&edDraft.projAuto){edDraft.projet=defaultProject(edDraft.date)}fillEditor(edDraft)};
-$('ed-amt').oninput=e=>{edDraft.touched.montant=true;if(edDraft.cat==='km'){edDraft.km=parseInt(e.target.value,10)||null}else{edDraft.montant=parseNum(e.target.value);if(edDraft.devise!=='EUR')edDraft.converti=true}};
+$('ed-amt').oninput=e=>{edDraft.touched.montant=true;if(edDraft.cat==='km'){edDraft.km=parseInt(e.target.value,10)||null;$('ed-tva').textContent=ikText(edDraft)}else{edDraft.montant=parseNum(e.target.value);if(edDraft.devise!=='EUR')edDraft.converti=true}};
 $('ed-lib').oninput=e=>{edDraft.libelle=e.target.value;edDraft.touched.libelle=true};
 $('ed-lieu').oninput=e=>{edDraft.lieu=e.target.value;edDraft.touched.lieu=true};
 $('ed-pre').oninput=e=>{edDraft.prestataire=e.target.value;edDraft.touched.prestataire=true};
@@ -880,6 +926,12 @@ $('ed-ht').oninput=e=>{edDraft.ht=parseNum(e.target.value);edDraft.tva=null;edDr
   const d=edDraft;d.taux='';d.horsTva=0;d.vatDoute=false;
   const t=d.ht!=null&&d.montant!=null&&d.ht<d.montant?r2(d.montant-d.ht):null;
   $('ed-tva').className='hint num';$('ed-tva').textContent=d.ht==null?tvaText(d,null):(t!=null&&t/d.ht<=0.2025?tvaText(d,t):'HT incohérent avec le TTC (la TVA française ne dépasse pas 20 %)')};
+function ikText(d){
+  const v=veh();if(!v.cv)return 'Indemnité : réglez la puissance fiscale du véhicule (onglet Export).';
+  if(!d.km)return 'Barème '+CV_LAB[v.cv]+(v.electrique?' électrique':'')+' : saisissez la distance.';
+  const s=kmCumulBefore(d);
+  return `Indemnité : ${fmtEur(kmEur(d))} — barème ${BAREME.annee} ${CV_LAB[v.cv]}${v.electrique?' électrique':''}, ${s.toLocaleString('fr-FR')} km pro déjà comptés en ${kmYear(d)} (tranche ${kmTranche(s+d.km)}).`;
+}
 function tvaText(d,tva){
   const cur=d.devise&&d.devise!=='EUR'?d.devise:'€';
   const f=v=>numStr(r2(v).toFixed(2))+' '+cur;
@@ -953,9 +1005,15 @@ async function buildWorkbook(ctx){
   const zip=await JSZip.loadAsync(await templateBytes());
   const put=(p,d)=>zip.file(p,d,{createFolders:false});
   let sh=await zip.file('xl/worksheets/sheet1.xml').async('string');
-  const r1=sh.match(/<c r="H5"[^>]*><v>([\d.]+)<\/v>/),r2=sh.match(/<c r="H6"[^>]*><v>([\d.]+)<\/v>/);
-  const k1=r1?Number(r1[1]):0.5,k2=r2?Number(r2[1]):0.35;
-  const kmA=km=>!km?0:(km<=200?km*k1:200*k1+(km-200)*k2);
+  // Colonne H : la règle du modèle (taux ≤ 200 km / > 200 km) est remplacée par le barème kilométrique officiel.
+  // Formules partagées réécrites ligne par ligne (une saisie faite à la main dans Excel prend le taux de 1re tranche, H5) ;
+  // les trajets de l'appli sont écrits en valeurs, calculés avec le cumul annuel.
+  sh=sh.replace(/<c r="H(\d+)"([^>]*?)>(<f[^>]*?(?:\/>|>[^<]*<\/f>))/g,(m,r,attrs)=>{r=+r;if(r<8||r>57)return m;
+    return `<c r="H${r}"${attrs}><f>IF($G${r}&lt;&gt;0,ROUND($G${r}*$H$5,2),"")</f>`});
+  if(ctx.ik){
+    sh=setCell(sh,'G5','≤ 5 000 km');sh=setCell(sh,'H5',Math.round(ctx.ik.a*1000)/1000);
+    sh=setCell(sh,'G6','5-20 000 km');sh=setCell(sh,'H6',Math.round(ctx.ik.b*1000)/1000);
+  }
   sh=setCell(sh,'F3',ctx.nom||'');
   sh=setCell(sh,'M3',serial(ctx.month+'-01'));
   const tot={G:0,H:0,I:0,J:0,K:0,L:0,M:0,N:0};
@@ -968,7 +1026,7 @@ async function buildWorkbook(ctx){
       if(l.date)sh=setCell(sh,'D'+r,serial(l.date));
       if(l.justif)sh=setCell(sh,'E'+r,l.justif);
       if(l.projet)sh=setCell(sh,'F'+r,l.projet);
-      if(l.cat==='km'){if(l.km){sh=setCell(sh,'G'+r,l.km);tot.G+=l.km;h=kmA(l.km);tot.H+=h;n+=h}}
+      if(l.cat==='km'){if(l.km){sh=setCell(sh,'G'+r,l.km);tot.G+=l.km;h=l.kmEur||0;sh=setCell(sh,'H'+r,h);tot.H+=h;n+=h}}
       else if(l.montant!=null){const c=CAT[l.cat].col;sh=setCell(sh,c+r,l.montant);tot[c]+=l.montant;n+=l.montant}
     }
     sh=setCached(sh,'H'+r,h===''?'':h);
@@ -990,6 +1048,10 @@ async function buildWorkbook(ctx){
 
   const extra=[]; // feuilles ajoutées au modèle : {name, path}
   let wr=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+  // la chaîne de calcul du modèle cite des cellules H qui deviennent des valeurs : on la retire, Excel la reconstruit
+  zip.remove('xl/calcChain.xml');
+  wr=wr.replace(/<Relationship [^>]*Target="calcChain\.xml"\/>/,'');
+  ct=ct.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*\/>/,'');
   const addSheet=(name,path,rid)=>{
     extra.push(name);
     ct=ct.replace('</Types>',`<Override PartName="/xl/worksheets/${path}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
@@ -1010,7 +1072,7 @@ async function buildWorkbook(ctx){
       return `<c r="${ref}"${S_(kind==='head'?sHead:sTxt)} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`};
     let rows=`<row r="1">${head.map((h,i)=>cell(cols[i],1,h,'head')).join('')}</row>`;
     ctx.lines.forEach((l,i)=>{const r=i+2,km=l.cat==='km';
-      const ttc=km?Math.round(kmA(l.km||0)*100)/100:l.montant;
+      const ttc=km?(l.kmEur??null):l.montant;
       const tva=km?null:(l.tva!=null?l.tva:(l.ht!=null&&l.montant!=null&&l.ht<=l.montant?Math.round((l.montant-l.ht)*100)/100:null));
       const foreign=l.devise&&l.devise!=='EUR';
       const v=[l.justif||null,l.date?serial(l.date):null,l.prestataire||'',l.libelle||'',l.lieu||'',(CAT[l.cat]||{lab:''}).lab,l.projet||'',
@@ -1020,6 +1082,7 @@ async function buildWorkbook(ctx){
     const widths=[9,11,26,34,16,11,10,12,10,12,12,9,12,7];
     const note=ctx.lines.some(l=>l.devise&&l.devise!=='EUR')?'HT et TVA sont dans la devise du ticket quand celui-ci n\'est pas en euros.':'';
     if(note)rows+=`<row r="${ctx.lines.length+3}">${cell('A',ctx.lines.length+3,note,'txt')}</row>`;
+    if(ctx.ik)rows+=`<row r="${ctx.lines.length+4}">${cell('A',ctx.lines.length+4,ctx.ik.note,'txt')}</row>`;
     put('xl/worksheets/sheet3.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${rows}</sheetData><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToHeight="0"/></worksheet>`);
     addSheet('Détail','sheet3.xml','rId10');
   }
@@ -1059,7 +1122,11 @@ window.__buildWorkbook=buildWorkbook; // utilisé pour les essais
 async function exportCtx(){
   const ls=monthLines();const js=justifNumbers(ls);const out=[];
   for(const l of ls){out.push(Object.assign({},l,{justif:js.get(l.id)||null,photoBlob:l.photo?await dbGet('photos',l.id):null}))}
-  return {nom:S.nom,month,lines:out,ach:note.ach,ret:note.ret,ava:note.ava,obs:note.obs};
+  for(const o of out)if(o.cat==='km')o.kmEur=kmEur(o);
+  const v=veh(),y=month.slice(0,4),first=out.find(o=>o.cat==='km'&&o.km),f=v.electrique?BAREME.elec:1;
+  const ik=v.cv&&first?{a:BAREME.voitures[v.cv][0]*f,b:BAREME.voitures[v.cv][1]*f,
+    note:`Indemnités kilométriques : ${BAREME.source}, voiture ${CV_LAB[v.cv]}${v.electrique?' 100 % électrique (+20 %)':''} ; km professionnels déjà comptés en ${y} avant ce mois : ${kmCumulBefore(first).toLocaleString('fr-FR')} km ; chaque trajet = barème(cumul après) − barème(cumul avant).`}:null;
+  return {nom:S.nom,month,lines:out,ach:note.ach,ret:note.ret,ava:note.ava,obs:note.obs,ik};
 }
 function baseName(){return month+' NdF'+(S.tri?' '+S.tri:'')}
 function xmsg(t,cls){const m=$('x-msg');m.hidden=!t;m.className='msg'+(cls?' '+cls:'');m.textContent=t||''}
@@ -1079,6 +1146,7 @@ $('x-xlsx').onclick=async()=>{
   if(ls.some(l=>l.status==='analyse')){xmsg('Une lecture de ticket est encore en cours. Réessayez dans quelques secondes.','warn');return}
   const warn=[];if(ls.length>MAX_LINES)warn.push(`${ls.length} lignes : le modèle n'en contient que 50, les suivantes ne sont pas exportées.`);
   const np=ls.filter(l=>!l.projet).length;if(np)warn.push(`${np} ligne(s) sans projet.`);
+  if(!veh().cv&&ls.some(l=>l.cat==='km'&&l.km))warn.push('Puissance fiscale non réglée : les trajets en km sont à 0 €.');
   const nc=ls.filter(l=>l.devise&&l.devise!=='EUR'&&!l.converti).length;if(nc)warn.push(`${nc} montant(s) en devise étrangère non converti(s).`);
   if(!S.nom)warn.push('NOM Prénom non renseigné.');
   b.disabled=true;b.textContent='Génération…';
@@ -1229,7 +1297,7 @@ $('b-file').onchange=async e=>{
     // fusion : les projets s'ajoutent, les lignes de même identifiant sont remplacées, la clé API actuelle est gardée
     const s=d.settings||{};const codes=new Set(S.projets.map(p=>p.code));
     for(const p of s.projets||[])if(!codes.has(p.code))S.projets.push(p);
-    for(const k of ['nom','tri','hab','mailCpt','mailDg','model'])if(!S[k]&&s[k])S[k]=s[k];
+    for(const k of ['nom','tri','hab','mailCpt','mailDg','model','vehicule'])if(!S[k]&&s[k])S[k]=s[k];
     if(!S.mission.code&&s.mission)S.mission=s.mission;
     await saveSettings();
     for(const [k,v] of Object.entries(d.notes||{}))await dbPut('kv',v,k);

@@ -3,7 +3,7 @@
 //   pour qu'une mise à jour publiée arrive dès la prochaine ouverture en ligne ;
 // - les bibliothèques (vendor/, icônes) : cache d'abord, elles ne changent qu'avec VERSION.
 // Changer VERSION à chaque mise à jour des bibliothèques pour les renouveler sur les téléphones.
-const VERSION = 'ndf-1.2.1';
+const VERSION = 'ndf-1.3.0';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'modele-ndf.xltx',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png',
