@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Notes de frais</title>
+<meta name="description" content="Scan des tickets, projets par défaut, export Excel au format FI407/A.">
+<meta name="theme-color" content="#0E6170">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Notes de frais">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+/* Layout: one-column phone tool — month header, line list, bottom tab bar, full-screen line editor */
+:root{
+  --bg:#F3F6F7; --surface:#FFFFFF; --ink:#13222A; --muted:#5B6B73; --line:#D9E1E4;
+  --accent:#0E6170; --accent-ink:#FFFFFF; --accent-soft:#DCEEF0; --warn:#9A5B00; --warn-soft:#FDF0DC; --bad:#A3302A; --bad-soft:#F9E3E1; --ok:#2F7A45;
+  --f-display:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-num:ui-monospace,"SFMono-Regular","Roboto Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0D1518; --surface:#152126; --ink:#E4ECEE; --muted:#93A4AB; --line:#26363C;
+  --accent:#5BB8C6; --accent-ink:#06262C; --accent-soft:#163A41; --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0D1518; --surface:#152126; --ink:#E4ECEE; --muted:#93A4AB; --line:#26363C;
+  --accent:#5BB8C6; --accent-ink:#06262C; --accent-soft:#163A41; --warn:#F0B35A; --warn-soft:#3A2A12; --bad:#F0877F; --bad-soft:#3D1B19; --ok:#7CCB92; color-scheme:dark}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+html{color-scheme:light;padding-top:env(safe-area-inset-top,0px)}
+html,body{min-height:100%}
+body{margin:0}
+img{max-width:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:640px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 120px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+/* header */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:8px 14px}
+.month{display:flex;align-items:center;gap:4px}
+.month h1{font-size:22px;font-weight:600;min-width:9ch;text-align:center;text-transform:capitalize}
+.icon-btn{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;font-size:18px;line-height:1}
+.total{text-align:right}
+.total .num{font-size:22px;font-weight:500}
+
+/* summary strip */
+.strip{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+.chip b{color:var(--ink);font-weight:600}
+.chip.mission{background:var(--accent-soft);border-color:transparent;color:var(--ink)}
+
+/* lines */
+.list{display:flex;flex-direction:column;gap:8px}
+.row{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:12px;text-align:left;width:100%}
+.thumb{width:52px;height:52px;border-radius:8px;background:var(--accent-soft);object-fit:cover;display:grid;place-items:center;color:var(--accent);font-size:11px;font-weight:600;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.row .mid{min-width:0}
+.row .lib{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .meta{font-size:12.5px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
+.row .amt{text-align:right}
+.row .amt .num{font-size:15px}
+.tag{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--accent-soft);color:var(--ink);font-weight:500}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.bad{background:var(--bad-soft);color:var(--bad)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+
+.empty{padding:28px 20px;border:1px dashed var(--line);border-radius:14px;text-align:left;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.empty ol{margin:0;padding-left:20px;color:var(--muted)}
+.empty ol li{margin-block:4px}
+
+/* bottom action + tabs */
+.dock{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);z-index:5}
+.dock-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:1fr auto 1fr 1fr;align-items:end}
+.tab{background:none;border:0;padding:8px 4px 10px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11.5px;color:var(--muted)}
+.tab svg{width:22px;height:22px}
+.tab[aria-current="page"]{color:var(--accent);font-weight:600}
+.scan{margin:-22px 10px 8px;width:66px;height:66px;border-radius:20px;background:var(--accent);color:var(--accent-ink);border:4px solid var(--bg);display:grid;place-items:center;box-shadow:0 6px 16px rgba(10,50,60,.25)}
+.scan svg{width:28px;height:28px}
+.scan-label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* panels & forms */
+.panel{display:flex;flex-direction:column;gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.card h2{font-size:17px;font-weight:600}
+.hint{font-size:13px;color:var(--muted);margin:0}
+.field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.field label{font-size:12.5px;color:var(--muted);font-weight:500}
+.field input,.field select,.field textarea{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);min-height:44px}
+.field textarea{min-height:72px;resize:vertical}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--surface);font-weight:600}
+a.btn{text-decoration:none;color:inherit}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.danger{color:var(--bad);border-color:var(--bad-soft)}
+.btn.danger.armed{background:var(--bad);color:var(--surface)}
+.btn[disabled]{opacity:.5;cursor:default}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.btns .btn{flex:1 1 140px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.seg button{min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--bg);font-size:13.5px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+.proj{display:grid;grid-template-columns:minmax(70px,.6fr) 1fr 40px;gap:8px;align-items:center}
+.proj input{padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);min-width:0;width:100%;box-sizing:border-box}
+.msg{font-size:13.5px;padding:10px 12px;border-radius:10px;background:var(--accent-soft)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.msg.bad{background:var(--bad-soft);color:var(--bad)}
+
+/* editor overlay */
+.sheet{position:fixed;inset:0;background:var(--bg);z-index:20;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sheet-head{position:sticky;top:0;background:var(--bg);z-index:2;border-bottom:1px solid var(--line)}
+.sheet-head .in{max-width:640px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:calc(10px + env(safe-area-inset-top,0px)) 10px}
+.sheet-head h2{font-size:17px}
+.photo{border-radius:12px;overflow:hidden;background:var(--surface);border:1px solid var(--line);max-height:46vh;display:flex;justify-content:center}
+.photo img{max-height:46vh;width:auto;max-width:100%;object-fit:contain;cursor:zoom-in}
+.photo.big{max-height:none}.photo.big img{max-height:none;cursor:zoom-out}
+.status{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--muted)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;z-index:30;max-width:min(90vw,480px)}
+@media (max-width:380px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="wrap" id="app">
+  <!-- Vue NOTE -->
+  <section id="v-note" class="panel">
+    <div class="top">
+      <div class="month">
+        <button class="icon-btn" id="m-prev" aria-label="Mois précédent">‹</button>
+        <h1 id="m-label">—</h1>
+        <button class="icon-btn" id="m-next" aria-label="Mois suivant">›</button>
+      </div>
+      <div class="total"><div class="eyebrow">Total du mois</div><div class="num" id="m-total">0,00 €</div></div>
+    </div>
+    <div id="install" class="msg" hidden></div>
+    <div class="strip" id="strip"></div>
+    <div id="storage-msg" hidden class="msg warn"></div>
+    <div class="list" id="list"></div>
+    <div class="btns"><button class="btn" id="add-manual">+ Ligne sans ticket (km, oubli…)</button></div>
+  </section>
+
+  <!-- Vue PROJETS -->
+  <section id="v-proj" class="panel" hidden>
+    <div class="top"><h1 style="font-size:22px">Projets</h1></div>
+    <div class="card">
+      <h2>Projet par défaut</h2>
+      <p class="hint">Chaque nouvelle ligne reçoit ce projet. Vous pouvez toujours le changer ligne par ligne.</p>
+      <div class="field"><label for="d-hab">Projet habituel</label><select id="d-hab"></select></div>
+    </div>
+    <div class="card">
+      <h2>Mission temporaire</h2>
+      <p class="hint">Un déplacement de quelques jours sur un autre projet : pendant ces dates, ce projet remplace le projet habituel. La date du ticket fait foi.</p>
+      <div class="field"><label for="d-mis">Projet de la mission</label><select id="d-mis"></select></div>
+      <div class="grid2">
+        <div class="field"><label for="d-du">Du</label><input type="date" id="d-du"></div>
+        <div class="field"><label for="d-au">Au (inclus)</label><input type="date" id="d-au"></div>
+      </div>
+      <div class="btns"><button class="btn" id="d-mis-clear">Terminer la mission</button></div>
+    </div>
+    <div class="card">
+      <h2>Liste des projets</h2>
+      <p class="hint">Le code part dans la colonne « Imputation » de l'Excel.</p>
+      <div id="proj-list" class="panel" style="gap:8px"></div>
+      <div class="proj">
+        <input id="p-code" placeholder="Code" aria-label="Code du nouveau projet" autocomplete="off">
+        <input id="p-nom" placeholder="Nom du projet" aria-label="Nom du nouveau projet" autocomplete="off">
+        <button class="icon-btn" id="p-add" aria-label="Ajouter le projet">+</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Vue EXPORT -->
+  <section id="v-exp" class="panel" hidden>
+    <div class="top"><h1 style="font-size:22px">Export</h1><div class="total"><div class="eyebrow" id="x-mois">—</div><div class="num" id="x-total">0,00 €</div></div></div>
+    <div class="card">
+      <h2>Bénéficiaire</h2>
+      <div class="grid2">
+        <div class="field"><label for="s-nom">NOM Prénom</label><input id="s-nom" autocomplete="name"></div>
+        <div class="field"><label for="s-tri">Trigramme (nom du fichier)</label><input id="s-tri" maxlength="6" autocomplete="off"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Cadre de droite</h2>
+      <div class="grid2">
+        <div class="field"><label for="n-ach">Achats divers (€)</label><input id="n-ach" inputmode="decimal"></div>
+        <div class="field"><label for="n-ret">Retraits espèces (€)</label><input id="n-ret" inputmode="decimal"></div>
+        <div class="field"><label for="n-ava">Avances (€)</label><input id="n-ava" inputmode="decimal"></div>
+        <div class="field"><label>Montant net</label><div class="num" id="n-net" style="padding:10px 0;font-size:17px">—</div></div>
+      </div>
+      <div class="field"><label for="n-obs">Observations</label><textarea id="n-obs"></textarea></div>
+    </div>
+    <div class="card">
+      <h2>Fichiers</h2>
+      <p class="hint">L'Excel reprend votre modèle FI407/A. Un second onglet « Justificatifs » contient les photos des tickets, numérotées comme la colonne « Justif n° ».</p>
+      <div id="x-msg" hidden class="msg"></div>
+      <div class="btns">
+        <button class="btn primary" id="x-xlsx">Enregistrer l'Excel</button>
+        <button class="btn" id="x-zip">Photos seules (.zip)</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Envoi à la comptabilité</h2>
+      <div class="grid2">
+        <div class="field"><label for="s-mcpt">E-mail du comptable</label><input id="s-mcpt" type="email" inputmode="email" autocomplete="off"></div>
+        <div class="field"><label for="s-mdg">E-mail du DG</label><input id="s-mdg" type="email" inputmode="email" autocomplete="off"></div>
+      </div>
+      <p class="hint">Deux pièces jointes : <span class="num" id="m-pack">l'Excel et le .zip</span>. « Envoyer par mail » les remet ensemble à Outlook (ou à une autre messagerie) avec l'objet et le message ; les destinataires sont copiés, il reste à les coller.</p>
+      <div class="btns"><button class="btn primary" id="m-send">Préparer l'envoi</button></div>
+      <div id="m-msg" hidden class="msg"></div>
+      <div id="m-steps" class="panel" hidden style="gap:10px">
+        <button class="btn primary" id="m-share" hidden>Envoyer par mail (pièces jointes incluses)</button>
+        <div class="btns">
+          <button class="btn" id="m-sx">Enregistrer l'Excel</button>
+          <button class="btn" id="m-sz">Enregistrer les justificatifs (.zip)</button>
+        </div>
+        <div class="field"><label for="m-to">Destinataires</label><input id="m-to" readonly></div>
+        <div class="field"><label for="m-sub">Objet</label><input id="m-sub" readonly></div>
+        <div class="field"><label for="m-body">Message</label><textarea id="m-body" readonly rows="7"></textarea></div>
+        <div class="btns">
+          <button class="btn" id="m-cto">Copier les destinataires</button>
+          <button class="btn" id="m-csub">Copier l'objet</button>
+          <button class="btn" id="m-cbody">Copier le message</button>
+        </div>
+        <a class="btn" id="m-mailto" href="#">Ouvrir un brouillon pré-rempli (sans pièce jointe)</a>
+        <p class="hint">Sans le bouton « Envoyer par mail » : enregistrez les deux fichiers, ouvrez le brouillon et joignez-les depuis les téléchargements.</p>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Lecture des tickets</h2>
+      <p class="hint">Avec une clé API Claude, chaque photo est lue par Claude dès qu'il y a du réseau. Sans clé ou hors ligne, l'appli lit le texte du ticket sur le téléphone (moins fiable : vérifiez date et montant), puis le fait relire par Claude au retour du réseau.</p>
+      <div class="field"><label for="s-key">Clé API Claude (console.anthropic.com)</label><input id="s-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"></div>
+      <div class="field"><label for="s-model">Modèle</label><select id="s-model"></select></div>
+      <p class="hint">La clé reste sur ce téléphone et n'est envoyée qu'à api.anthropic.com. Prenez une clé dédiée à cette appli, avec une limite de dépense. Compter environ 1 à 2 centimes par ticket avec Opus 5.5.</p>
+      <div class="btns"><button class="btn" id="s-key-test">Tester la clé</button><button class="btn" id="s-key-del">Effacer la clé</button></div>
+      <div id="s-net" class="status"></div>
+    </div>
+    <div class="card">
+      <h2>Sauvegarde</h2>
+      <p class="hint">Vos lignes et photos ne sont que sur ce téléphone. Faites une sauvegarde avant de changer de téléphone ou de vider les données du navigateur. La clé API n'y figure pas.</p>
+      <div class="btns"><button class="btn" id="b-save">Sauvegarder tout (.zip)</button><button class="btn" id="b-load">Restaurer une sauvegarde</button></div>
+      <input type="file" id="b-file" accept=".zip,application/zip" hidden>
+      <div id="b-msg" hidden class="msg"></div>
+      <p class="hint" id="app-ver"></p>
+    </div>
+  </section>
+</div>
+
+<nav class="dock" aria-label="Navigation">
+  <div class="dock-in">
+    <button class="tab" data-v="v-note" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 12h7M9 16h7"/></svg>Note</button>
+    <label class="scan" for="cam" title="Scanner un ticket"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.2"/></svg><span class="scan-label">Scanner un ticket</span></label>
+    <button class="tab" data-v="v-proj"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h7l2 2h9v10H3z"/></svg>Projets</button>
+    <button class="tab" data-v="v-exp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>Export</button>
+  </div>
+</nav>
+<input type="file" id="cam" accept="image/*" capture="environment" hidden>
+<input type="file" id="gal" accept="image/*" hidden>
+
+<!-- Éditeur de ligne -->
+<div class="sheet" id="ed" hidden role="dialog" aria-modal="true" aria-labelledby="ed-title">
+  <div class="sheet-head"><div class="in">
+    <button class="btn" id="ed-close">Fermer</button>
+    <h2 id="ed-title">Ligne</h2>
+    <button class="btn primary" id="ed-save">Enregistrer</button>
+  </div></div>
+  <div class="wrap panel" style="padding-bottom:40px">
+    <div class="photo" id="ed-photo" hidden><img id="ed-img" alt="Photo du ticket"></div>
+    <div class="status" id="ed-status" hidden></div>
+    <div class="btns" id="ed-photo-btns">
+      <button class="btn" id="ed-shot">Photo du ticket</button>
+      <button class="btn" id="ed-pick">Depuis la galerie</button>
+      <button class="btn" id="ed-reread" hidden>Relire le ticket</button>
+    </div>
+    <div class="field"><label>Nature</label><div class="seg" id="ed-cat"></div></div>
+    <div class="grid2">
+      <div class="field"><label for="ed-date">Date</label><input type="date" id="ed-date"></div>
+      <div class="field" id="ed-amt-f"><label for="ed-amt" id="ed-amt-l">Montant TTC (€)</label><input id="ed-amt" inputmode="decimal" autocomplete="off"></div>
+    </div>
+    <div id="ed-cur" hidden class="msg warn"></div>
+    <div class="field"><label for="ed-lib">Libellé</label><input id="ed-lib" maxlength="60" autocomplete="off"></div>
+    <div class="grid2">
+      <div class="field"><label for="ed-lieu">Lieu</label><input id="ed-lieu" autocomplete="off"></div>
+      <div class="field"><label for="ed-proj">Projet (imputation)</label><select id="ed-proj"></select></div>
+    </div>
+    <p class="hint" id="ed-proj-hint"></p>
+    <div class="btns"><button class="btn danger" id="ed-del">Supprimer la ligne</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/tesseract/tesseract.min.js"></script>
+<script>
+"use strict";
+const APP_VERSION='1.0.1';
+// modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
+let tplP=null;
+function templateBytes(){
+  if(!tplP)tplP=fetch('modele-ndf.xltx').then(r=>{if(!r.ok)throw new Error('modèle Excel introuvable ('+r.status+')');return r.arrayBuffer()}).catch(e=>{tplP=null;throw e});
+  return tplP;
+}
+
+/* ---------- constantes ---------- */
+const CATS=[
+  {k:'repas',lab:'Repas',col:'K'},{k:'voyage',lab:'Voyage',col:'I'},{k:'hotel',lab:'Hôtel',col:'J'},
+  {k:'reception',lab:'Réception',col:'M'},{k:'divers',lab:'Divers',col:'L'},{k:'km',lab:'Km',col:'G'}];
+const CAT=Object.fromEntries(CATS.map(c=>[c.k,c]));
+const MAX_LINES=50;
+const fmtEur=n=>(n||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,'0');
+const todayISO=()=>{const d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())};
+const parseNum=s=>{if(s==null)return null;const t=String(s).replace(/\s/g,'').replace(',','.');if(t==='')return null;const n=Number(t);return isFinite(n)?Math.round(n*100)/100:null};
+const numStr=n=>n==null?'':String(n).replace('.',',');
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+
+/* ---------- stockage local (IndexedDB, repli mémoire) ---------- */
+const mem={lines:new Map(),photos:new Map(),kv:new Map()};
+let useMem=false, dbp=null;
+function idb(){
+  if(!dbp) dbp=new Promise((res,rej)=>{
+    try{const r=indexedDB.open('ndf',1);
+      r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('lines',{keyPath:'id'});d.createObjectStore('photos');d.createObjectStore('kv');};
+      r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}catch(e){rej(e)}
+  });
+  return dbp;
+}
+async function op(store,mode,fn){
+  if(!useMem){
+    try{const d=await idb();
+      return await new Promise((res,rej)=>{const t=d.transaction(store,mode);let q;try{q=fn(t.objectStore(store))}catch(e){rej(e);return}
+        t.oncomplete=()=>res(q?q.result:undefined);t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error);});
+    }catch(e){useMem=true;showStorageWarn();}
+  }
+  return null;
+}
+async function dbAll(store){const r=await op(store,'readonly',s=>s.getAll());return useMem?[...mem[store].values()]:(r||[])}
+async function dbGet(store,key){const r=await op(store,'readonly',s=>s.get(key));return useMem?mem[store].get(key):r}
+async function dbPut(store,val,key){
+  const r=await op(store,'readwrite',s=>key===undefined?s.put(val):s.put(val,key));
+  if(useMem) mem[store].set(key===undefined?val.id:key,val);
+}
+async function dbDel(store,key){await op(store,'readwrite',s=>s.delete(key));if(useMem)mem[store].delete(key)}
+function showStorageWarn(){const m=$('storage-msg');m.textContent="Le stockage du téléphone n'est pas accessible ici : les tickets seront perdus à la fermeture. Exportez l'Excel avant de quitter.";m.hidden=false}
+
+/* ---------- état ---------- */
+let S={nom:'',tri:'',projets:[],hab:'',mission:{code:'',du:'',au:''}};
+let L=[];              // toutes les lignes
+let month=todayISO().slice(0,7);
+let note={ach:'',ret:'',ava:'',obs:''};
+const thumbs=new Map(); // id -> objectURL
+
+async function saveSettings(){await dbPut('kv',S,'settings')}
+async function saveNote(){await dbPut('kv',note,'note:'+month)}
+async function loadNote(){note=Object.assign({ach:'',ret:'',ava:'',obs:''},(await dbGet('kv','note:'+month))||{})}
+
+function defaultProject(dateISO){
+  const m=S.mission;
+  if(m.code&&m.du&&m.au&&dateISO&&dateISO>=m.du&&dateISO<=m.au) return m.code;
+  if(m.code&&m.du&&m.au&&!dateISO){const t=todayISO();if(t>=m.du&&t<=m.au)return m.code}
+  return S.hab||'';
+}
+const lineMonth=l=>(l.date||l.created.slice(0,10)).slice(0,7);
+const monthLines=()=>L.filter(l=>lineMonth(l)===month).sort((a,b)=>((a.date||'9')+a.created).localeCompare((b.date||'9')+b.created));
+function kmAmount(km){if(!km)return 0;return km<=200?km*RATE1:200*RATE1+(km-200)*RATE2}
+let RATE1=0.5,RATE2=0.35;
+const lineAmount=l=>l.cat==='km'?Math.round(kmAmount(l.km||0)*100)/100:(l.montant||0);
+function justifNumbers(lines){const m=new Map();let n=0;for(const l of lines){if(l.photo)m.set(l.id,++n)}return m}
+
+/* ---------- rendu ---------- */
+function monthLabel(m){const [y,mo]=m.split('-').map(Number);return new Date(y,mo-1,1).toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}
+function projName(code){const p=S.projets.find(p=>p.code===code);return p?p.code:(code||'')}
+function render(){
+  const ls=monthLines(); const js=justifNumbers(ls);
+  $('m-label').textContent=monthLabel(month);
+  const tot=ls.reduce((s,l)=>s+lineAmount(l),0);
+  $('m-total').textContent=fmtEur(tot);$('x-total').textContent=fmtEur(tot);$('x-mois').textContent=monthLabel(month);
+  // bandeau
+  const st=$('strip');st.innerHTML='';
+  const c1=document.createElement('span');c1.className='chip';c1.innerHTML='Projet par défaut <b></b>';c1.querySelector('b').textContent=S.hab||'aucun';st.append(c1);
+  const m=S.mission;
+  if(m.code&&m.du&&m.au){const c=document.createElement('span');c.className='chip mission';c.innerHTML='Mission <b></b>';
+    c.querySelector('b').textContent=m.code+' · '+new Date(m.du+'T12:00').toLocaleDateString('fr-FR',{day:'numeric',month:'short'})+' → '+new Date(m.au+'T12:00').toLocaleDateString('fr-FR',{day:'numeric',month:'short'});st.append(c)}
+  const c2=document.createElement('span');c2.className='chip';c2.innerHTML='<b></b> ligne(s) / 50';c2.querySelector('b').textContent=ls.length;st.append(c2);
+  // liste
+  const list=$('list');list.innerHTML='';
+  if(!ls.length){
+    list.innerHTML=`<div class="empty"><h2 style="font-size:17px">Aucune dépense ce mois-ci</h2>
+      <ol><li>Touchez le bouton appareil photo en bas et photographiez le ticket.</li>
+      <li>L'appli lit la date, le montant, l'enseigne et propose la nature de la dépense (par Claude si une clé est réglée, sinon sur le téléphone).</li>
+      <li>Vérifiez, choisissez le projet si besoin, enregistrez.</li>
+      <li>En fin de mois : onglet Export → l'Excel au format de votre modèle, photos incluses.</li></ol>
+      ${S.projets.length?'':'<p class="hint">Commencez par saisir vos projets dans l\'onglet Projets.</p>'}</div>`;
+    return;
+  }
+  for(const l of ls){
+    const b=document.createElement('button');b.className='row';b.onclick=()=>openEditor(l.id);
+    const th=document.createElement('div');th.className='thumb';
+    if(l.photo&&thumbs.get(l.id)){const i=document.createElement('img');i.src=thumbs.get(l.id);i.alt='';th.append(i)}else th.textContent=l.cat==='km'?'KM':'—';
+    const mid=document.createElement('div');mid.className='mid';
+    const lib=document.createElement('div');lib.className='lib';lib.textContent=l.libelle||(l.status==='analyse'?'Lecture du ticket…':'Sans libellé');
+    const meta=document.createElement('div');meta.className='meta';
+    const d=document.createElement('span');d.textContent=l.date?new Date(l.date+'T12:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}):'date ?';meta.append(d);
+    const ct=document.createElement('span');ct.textContent=(CAT[l.cat]||{lab:'?'}).lab;meta.append(ct);
+    if(js.has(l.id)){const j=document.createElement('span');j.textContent='J'+js.get(l.id);meta.append(j)}
+    const pj=document.createElement('span');pj.className='tag'+(l.projet?'':' warn');pj.textContent=l.projet?projName(l.projet):'sans projet';meta.append(pj);
+    if(l.status==='analyse'){const s=document.createElement('span');s.innerHTML='<i class="spin"></i>';meta.append(s)}
+    if(l.devise&&l.devise!=='EUR'&&!l.converti){const w=document.createElement('span');w.className='tag warn';w.textContent=l.devise+' à convertir';meta.append(w)}
+    mid.append(lib,meta);
+    const a=document.createElement('div');a.className='amt';
+    a.innerHTML='<div class="num"></div>';a.firstChild.textContent=l.cat==='km'?(l.km||0)+' km':fmtEur(l.montant);
+    if(l.cat==='km'){const s=document.createElement('div');s.className='meta num';s.textContent=fmtEur(lineAmount(l));a.append(s)}
+    b.append(th,mid,a);list.append(b);
+  }
+}
+function fillProjSelect(sel,value,emptyLabel){
+  sel.innerHTML='';const o=document.createElement('option');o.value='';o.textContent=emptyLabel;sel.append(o);
+  for(const p of S.projets){const x=document.createElement('option');x.value=p.code;x.textContent=p.code+(p.nom?' — '+p.nom:'');sel.append(x)}
+  if(value&&!S.projets.some(p=>p.code===value)){const x=document.createElement('option');x.value=value;x.textContent=value+' (supprimé)';sel.append(x)}
+  sel.value=value||'';
+}
+function renderProjects(){
+  fillProjSelect($('d-hab'),S.hab,'— aucun —');fillProjSelect($('d-mis'),S.mission.code,'— pas de mission —');
+  $('d-du').value=S.mission.du||'';$('d-au').value=S.mission.au||'';
+  const box=$('proj-list');box.innerHTML='';
+  if(!S.projets.length){box.innerHTML='<p class="hint">Aucun projet pour l\'instant. Ajoutez-en un ci-dessous (ex. code « P20 », nom « Abu Dhabi »).</p>'}
+  S.projets.forEach((p,i)=>{
+    const r=document.createElement('div');r.className='proj';
+    const c=document.createElement('input');c.value=p.code;c.setAttribute('aria-label','Code');c.id='pc-'+i;
+    const n=document.createElement('input');n.value=p.nom||'';n.setAttribute('aria-label','Nom');n.id='pn-'+i;
+    const del=document.createElement('button');del.className='icon-btn';del.textContent='×';del.setAttribute('aria-label','Supprimer '+p.code);
+    c.onchange=async()=>{const v=c.value.trim();if(!v||S.projets.some((q,j)=>j!==i&&q.code===v)){c.value=p.code;toast('Code vide ou déjà utilisé');return}
+      const old=p.code;p.code=v;if(S.hab===old)S.hab=v;if(S.mission.code===old)S.mission.code=v;
+      for(const l of L)if(l.projet===old){l.projet=v;await dbPut('lines',l)}
+      await saveSettings();renderProjects();render()};
+    n.onchange=async()=>{p.nom=n.value.trim();await saveSettings();renderProjects()};
+    del.onclick=async()=>{
+      if(del.dataset.armed!=='1'){del.dataset.armed='1';del.textContent='OK ?';del.style.width='auto';setTimeout(()=>{del.dataset.armed='';del.textContent='×'},3000);return}
+      S.projets.splice(i,1);if(S.hab===p.code)S.hab='';if(S.mission.code===p.code)S.mission={code:'',du:'',au:''};
+      await saveSettings();renderProjects();render()};
+    r.append(c,n,del);box.append(r);
+  });
+}
+function renderExport(){
+  $('s-nom').value=S.nom||'';$('s-tri').value=S.tri||'';renderReading();renderNet();
+  $('s-mcpt').value=S.mailCpt||'';$('s-mdg').value=S.mailDg||'';$('m-pack').textContent=baseName()+'.xlsx et '+baseName()+' justificatifs.zip';
+  packs=null;
+  $('m-steps').hidden=true;mmsg(note.prep?'Dernière préparation de ce mois : '+new Date(note.prep).toLocaleString('fr-FR',{dateStyle:'short',timeStyle:'short'})+'.':'');
+  $('n-ach').value=note.ach;$('n-ret').value=note.ret;$('n-ava').value=note.ava;$('n-obs').value=note.obs;
+  updNet();
+}
+function updNet(){
+  const tot=monthLines().reduce((s,l)=>s+lineAmount(l),0);
+  const net=tot+(parseNum(note.ach)||0)-(parseNum(note.ret)||0)-(parseNum(note.ava)||0);
+  $('n-net').textContent=fmtEur(net);
+}
+
+/* ---------- navigation ---------- */
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.removeAttribute('aria-current'));t.setAttribute('aria-current','page');
+  for(const v of ['v-note','v-proj','v-exp'])$(v).hidden=v!==t.dataset.v;
+  if(t.dataset.v==='v-proj')renderProjects();if(t.dataset.v==='v-exp')renderExport();window.scrollTo(0,0);
+});
+async function setMonth(m){month=m;await loadNote();render();renderExport()}
+$('m-prev').onclick=()=>{const [y,mo]=month.split('-').map(Number);const d=new Date(y,mo-2,1);setMonth(d.getFullYear()+'-'+pad(d.getMonth()+1))};
+$('m-next').onclick=()=>{const [y,mo]=month.split('-').map(Number);const d=new Date(y,mo,1);setMonth(d.getFullYear()+'-'+pad(d.getMonth()+1))};
+
+/* ---------- projets ---------- */
+$('p-add').onclick=async()=>{
+  const code=$('p-code').value.trim(),nom=$('p-nom').value.trim();
+  if(!code){toast('Saisissez au moins un code');return}
+  if(S.projets.some(p=>p.code===code)){toast('Ce code existe déjà');return}
+  S.projets.push({code,nom});if(!S.hab)S.hab=code;
+  $('p-code').value='';$('p-nom').value='';await saveSettings();renderProjects();render();
+};
+$('d-hab').onchange=async e=>{S.hab=e.target.value;await saveSettings();render()};
+async function misChange(){S.mission={code:$('d-mis').value,du:$('d-du').value,au:$('d-au').value};
+  if(S.mission.du&&S.mission.au&&S.mission.au<S.mission.du){toast('La date de fin précède la date de début')}
+  await saveSettings();render()}
+$('d-mis').onchange=misChange;$('d-du').onchange=misChange;$('d-au').onchange=misChange;
+$('d-mis-clear').onclick=async()=>{S.mission={code:'',du:'',au:''};await saveSettings();renderProjects();render();toast('Mission terminée : retour au projet habituel')};
+
+/* ---------- export : champs ---------- */
+$('s-nom').onchange=async e=>{S.nom=e.target.value.trim();if(!S.tri)S.tri=trigramme(S.nom);$('s-tri').value=S.tri;await saveSettings()};
+$('s-tri').onchange=async e=>{S.tri=e.target.value.trim();await saveSettings()};
+for(const [id,k] of [['n-ach','ach'],['n-ret','ret'],['n-ava','ava'],['n-obs','obs']])
+  $(id).oninput=e=>{note[k]=e.target.value;updNet();clearTimeout($(id)._t);$(id)._t=setTimeout(saveNote,400)};
+function trigramme(nom){ // NOM Prénom -> initiale prénom + initiale nom + dernière lettre du nom
+  const parts=nom.trim().split(/\s+/);if(parts.length<2)return '';
+  const up=parts.filter(p=>p===p.toUpperCase()&&/[A-Z]/i.test(p));
+  const last=up.length?up.join(''):parts[parts.length-1];               // NOM en capitales, sinon « Prénom Nom »
+  const first=up.length?(parts.find(p=>!up.includes(p))||''):parts[0];
+  return (first[0]||'').toUpperCase()+(last[0]||'').toUpperCase()+(last[last.length-1]||'').toLowerCase();
+}
+
+/* ---------- photos ---------- */
+async function compress(file){
+  let src=null;
+  try{src=await createImageBitmap(file,{imageOrientation:'from-image'})}catch(e){}
+  if(!src){src=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('image illisible'));i.src=URL.createObjectURL(file)})}
+  const w=src.width,h=src.height,k=Math.min(1,1800/Math.max(w,h));
+  const c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
+  c.getContext('2d').drawImage(src,0,0,c.width,c.height);
+  const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',0.82));
+  return {blob,w:c.width,h:c.height};
+}
+let pendingTarget=null; // id de ligne à laquelle rattacher la photo (sinon nouvelle ligne)
+$('cam').onchange=e=>onPhoto(e.target);$('gal').onchange=e=>onPhoto(e.target);
+document.querySelector('label.scan').addEventListener('click',()=>{pendingTarget=null});
+async function onPhoto(input){
+  const f=input.files&&input.files[0];input.value='';if(!f)return;
+  let ph;try{ph=await compress(f)}catch(e){toast("Cette image n'a pas pu être lue");return}
+  let l;
+  if(pendingTarget){l=L.find(x=>x.id===pendingTarget)}
+  if(!l){
+    if(monthLines().length>=MAX_LINES)toast('Attention : le modèle Excel est limité à 50 lignes par mois');
+    l={id:uid(),created:new Date().toISOString(),date:'',libelle:'',lieu:'',cat:'repas',montant:null,km:null,projet:defaultProject(''),
+       photo:false,w:0,h:0,devise:'EUR',converti:false,touched:{},status:'',projAuto:true};
+    L.push(l);
+  }
+  await dbPut('photos',ph.blob,l.id);
+  if(thumbs.get(l.id))URL.revokeObjectURL(thumbs.get(l.id));thumbs.set(l.id,URL.createObjectURL(ph.blob));
+  l.photo=true;l.w=ph.w;l.h=ph.h;l.status='analyse';await dbPut('lines',l);
+  if(!edId||edId!==l.id)openEditor(l.id);else fillEditor(l);
+  render();analyse(l.id,ph.blob);
+}
+
+/* ---------- lecture des tickets ----------
+   En ligne avec une clé : API Claude (lecture fiable, structurée).
+   Hors ligne ou sans clé : reconnaissance de texte locale (Tesseract) + règles simples.
+   Une ligne lue localement est relue par Claude au retour du réseau, sans écraser ce que vous avez corrigé. */
+const PROMPT=`Tu lis la photo d'un ticket de caisse, d'une facture ou d'un reçu, pour une note de frais professionnelle en France.
+Remplis les champs ainsi :
+- est_justificatif : false si l'image ne montre pas de justificatif de dépense ;
+- date : date de la dépense au format AAAA-MM-JJ, chaîne vide si illisible ;
+- commercant : nom de l'enseigne ou du prestataire ;
+- libelle : libellé court pour la note de frais, 40 caractères au plus, en français, ex. "Déjeuner – Le Zinc", "Taxi gare → hôtel", "Nuit hôtel Ibis Lyon", "Billet TGV Paris-Lyon" ;
+- lieu : ville de la dépense, chaîne vide si inconnue ;
+- montant : montant total TTC effectivement payé, avec un point décimal (ex. "23.40"), chaîne vide si illisible ;
+- devise : code ISO 4217 de ce montant (EUR si le symbole est €) ;
+- categorie : "voyage" (train, avion, taxi, VTC, location de véhicule, carburant, péage, parking, transports en commun), "hotel" (hébergement), "repas" (repas du salarié), "reception" (repas ou invitation avec des clients ou tiers, plusieurs couverts) ou "divers" (tout le reste) ;
+- confiance : "haute", "moyenne" ou "basse" selon la lisibilité du ticket.`;
+const SCHEMA={type:'object',additionalProperties:false,
+  required:['est_justificatif','date','commercant','libelle','lieu','montant','devise','categorie','confiance'],
+  properties:{est_justificatif:{type:'boolean'},date:{type:'string'},commercant:{type:'string'},libelle:{type:'string'},lieu:{type:'string'},
+    montant:{type:'string'},devise:{type:'string'},categorie:{type:'string',enum:['voyage','hotel','repas','reception','divers']},
+    confiance:{type:'string',enum:['haute','moyenne','basse']}}};
+const MODELS={'claude-opus-5-5':'Claude Opus 5.5 (recommandé)','claude-haiku-5-5':'Claude Haiku 5.5 (environ 40 fois moins cher)'};
+let anthropicMod=null;
+async function claudeClient(){
+  if(!anthropicMod)anthropicMod=(await import('./vendor/anthropic.mjs')).default;
+  // clé personnelle stockée sur ce téléphone uniquement ; l'appel part directement vers api.anthropic.com
+  return {Anthropic:anthropicMod,client:new anthropicMod({apiKey:S.apiKey,dangerouslyAllowBrowser:true,maxRetries:1,timeout:60000})};
+}
+function blobToB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=()=>rej(r.error);r.readAsDataURL(blob)})}
+async function readWithClaude(blob){
+  const {Anthropic,client}=await claudeClient();
+  const model=S.model||'claude-opus-5-5';
+  const params={model,max_tokens:4000,
+    output_config:{effort:'low',format:{type:'json_schema',schema:SCHEMA}},
+    messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:await blobToB64(blob)}},{type:'text',text:PROMPT}]}]};
+  let resp;
+  try{
+    if(model==='claude-opus-5-5'){ // repli côté serveur si un filtre de sécurité refuse la demande
+      resp=await client.beta.messages.create(Object.assign(params,{betas:['server-side-fallback-2026-07-01'],fallbacks:'default'}));
+    }else resp=await client.messages.create(params);
+  }catch(e){
+    if(e instanceof Anthropic.AuthenticationError)throw {kind:'auth',msg:'Clé API refusée. Vérifiez-la dans l\'onglet Export → Lecture des tickets.'};
+    if(e instanceof Anthropic.PermissionDeniedError)throw {kind:'auth',msg:'Cette clé n\'a pas accès à ce modèle.'};
+    if(e instanceof Anthropic.RateLimitError)throw {kind:'retry',msg:'Trop de lectures d\'affilée. Réessayez dans un moment.'};
+    if(e instanceof Anthropic.BadRequestError)throw {kind:'fatal',msg:'Demande refusée par l\'API : '+(e.message||'').slice(0,160)};
+    if(e instanceof Anthropic.APIConnectionError)throw {kind:'offline',msg:'Pas de connexion à l\'API.'};
+    if(e instanceof Anthropic.APIError)throw {kind:'retry',msg:'Service momentanément indisponible ('+(e.status||'?')+').'};
+    throw {kind:'offline',msg:String(e&&e.message||e)};
+  }
+  if(resp.stop_reason==='refusal')throw {kind:'fatal',msg:'Claude a refusé de lire cette image.'};
+  const txt=(resp.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+  let r;try{r=JSON.parse(txt)}catch(e){throw {kind:'fatal',msg:'Réponse illisible.'}}
+  const m=parseNum(r.montant);
+  return {erreur:!r.est_justificatif,date:r.date,libelle:r.libelle||r.commercant,lieu:r.lieu,montant:m,devise:r.devise,categorie:r.categorie,confiance:r.confiance,source:'claude'};
+}
+
+/* --- lecture locale (hors ligne) --- */
+let tessWorkerP=null;
+function tessWorker(){
+  if(!tessWorkerP)tessWorkerP=(async()=>{
+    const base=new URL('vendor/tesseract/',location.href).href;
+    return Tesseract.createWorker('fra',1,{workerPath:base+'worker.min.js',corePath:base,langPath:base+'lang',gzip:true,workerBlobURL:false,cacheMethod:'none'});
+  })().catch(e=>{tessWorkerP=null;throw e});
+  return tessWorkerP;
+}
+const MOIS={janv:1,jan:1,fevr:2,fev:2,feb:2,mars:3,mar:3,avr:4,apr:4,mai:5,may:5,juin:6,jun:6,juil:7,jul:7,aout:8,aug:8,sept:9,sep:9,oct:10,nov:11,dec:12};
+function parseReceipt(text){
+  const raw=text.replace(/\r/g,'');const lines=raw.split('\n').map(s=>s.trim()).filter(Boolean);
+  const plain=s=>s.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+  const low=plain(raw);
+  // date : première date plausible (pas dans le futur, moins de 2 ans)
+  let date='';const now=new Date();
+  const ok=(y,m,d)=>{if(y<100)y+=2000;const t=new Date(y,m-1,d);if(t.getMonth()!==m-1||t>now||now-t>730*864e5)return '';return y+'-'+pad(m)+'-'+pad(d)};
+  for(const mm of raw.matchAll(/\b(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})\b/g)){date=ok(+mm[3],+mm[2],+mm[1]);if(date)break}
+  if(!date)for(const mm of plain(raw).matchAll(/\b(\d{1,2})\s+([a-z]{3,5})\.?\s+(\d{4})\b/g)){const mo=MOIS[mm[2]]||MOIS[mm[2].slice(0,4)]||MOIS[mm[2].slice(0,3)];if(mo){date=ok(+mm[3],mo,+mm[1]);if(date)break}}
+  if(!date)for(const mm of raw.matchAll(/\b(20\d{2})[\/.\-](\d{1,2})[\/.\-](\d{1,2})\b/g)){date=ok(+mm[1],+mm[2],+mm[3]);if(date)break}
+  // montant : priorité aux lignes « total / à payer / TTC », sinon le plus grand montant
+  const amt=s=>[...s.matchAll(/(\d{1,5}(?:[ .]\d{3})*)[,.](\d{2})(?!\d)/g)].map(m=>Number(m[1].replace(/[ .]/g,'')+'.'+m[2]));
+  let montant=null;
+  const prio=[/net\s*a\s*payer|a\s*payer|montant\s*du/,/total\s*ttc|ttc/,/\btotal\b/,/\b(cb|carte|visa|mastercard|paiement|regle)\b/];
+  for(const re of prio){for(const l of lines){if(re.test(plain(l))&&!/ht\b|tva/.test(plain(l))){const a=amt(l);if(a.length){montant=Math.max(...a);break}}}if(montant!=null)break}
+  if(montant==null){const all=lines.flatMap(amt).filter(v=>v<10000);if(all.length)montant=Math.max(...all)}
+  let devise='EUR';
+  if(/\busd\b|\$/.test(low))devise='USD';else if(/\baed\b|dirham/.test(low))devise='AED';else if(/\bchf\b/.test(low))devise='CHF';else if(/£|\bgbp\b/.test(low))devise='GBP';
+  if(/€|\beur\b|euro/.test(low))devise='EUR';
+  // commerçant : première ligne lisible du haut du ticket
+  const merch=(lines.slice(0,6).find(l=>(l.match(/[a-zà-ÿ]/gi)||[]).length>=3&&(l.match(/\d/g)||[]).length<4)||'').replace(/[^\p{L}\p{N} '&\-.]/gu,'').trim().slice(0,30);
+  // ville : après un code postal
+  let lieu='';const cp=raw.match(/\b\d{5}\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ' \-]{2,30})/);if(cp)lieu=cp[1].trim().split(/\s{2,}/)[0];
+  lieu=lieu?lieu.charAt(0)+lieu.slice(1).toLowerCase():'';
+  // nature
+  let cat='divers';
+  if(/hotel|ibis|novotel|mercure|campanile|kyriad|b&b|nuitee|chambre|hebergement|airbnb|taxe de sejour/.test(low))cat='hotel';
+  else if(/sncf|tgv|ouigo|ter\b|billet|taxi|uber|g7|bolt|heetch|peage|autoroute|sanef|aprr|vinci autoroutes|parking|indigo|effia|carburant|gazole|gasoil|sp95|sp98|e10|diesel|esso|shell|totalenergies|station|avis|hertz|europcar|sixt|ratp|navigo|metro|air france|easyjet|transavia|vol\b/.test(low))cat='voyage';
+  else if(/restaurant|brasserie|bistro|cafe|menu|plat|dessert|boisson|couverts?|boulangerie|pizz|sushi|burger|mcdonald|kfc|traiteur|table/.test(low)){
+    const cv=low.match(/(\d+)\s*couverts?/);cat=cv&&+cv[1]>=3?'reception':'repas'}
+  const labels={hotel:'Hôtel',voyage:'Transport',repas:'Repas',reception:'Réception',divers:'Achat'};
+  const libelle=(labels[cat]+(merch?' – '+merch:'')).slice(0,40);
+  const conf=(date&&montant!=null)?'moyenne':'basse';
+  return {erreur:false,date,libelle,lieu,montant,devise,categorie:cat,confiance:conf,source:'local'};
+}
+async function readLocally(blob){
+  const w=await tessWorker();
+  const {data}=await w.recognize(blob);
+  return parseReceipt(data.text||'');
+}
+
+function applyReading(cur,r){
+  const t=cur.touched||{};
+  if(!t.date&&/^\d{4}-\d{2}-\d{2}$/.test(r.date||''))cur.date=r.date;
+  if(!t.libelle&&r.libelle)cur.libelle=String(r.libelle).slice(0,60);
+  if(!t.lieu&&r.lieu)cur.lieu=String(r.lieu);
+  if(!t.cat&&CAT[r.categorie]&&r.categorie!=='km')cur.cat=r.categorie;
+  if(!t.montant&&typeof r.montant==='number')cur.montant=Math.round(r.montant*100)/100;
+  if(!t.montant){cur.devise=(r.devise||'EUR').toUpperCase();cur.montantOrig=typeof r.montant==='number'?r.montant:null;cur.converti=cur.devise==='EUR'}
+  if(cur.projAuto&&!t.projet)cur.projet=defaultProject(cur.date);
+  cur.confiance=r.confiance||'';cur.source=r.source;cur.status='ok';cur.errMsg='';
+}
+async function analyse(id,blob,opts={}){
+  const l=L.find(x=>x.id===id);if(!l)return;
+  const useClaude=S.apiKey&&navigator.onLine&&!opts.localOnly;
+  let r=null,err=null;
+  if(useClaude){try{r=await readWithClaude(blob)}catch(e){err=e}}
+  if(!r&&(!useClaude||(err&&err.kind==='offline'))){
+    try{r=await readLocally(blob);if(S.apiKey)r.pendingClaude=true}catch(e){err=err||{kind:'fatal',msg:'La lecture locale a échoué : '+(e&&e.message||e)}}
+  }
+  const cur=L.find(x=>x.id===id);if(!cur)return;
+  if(r&&r.erreur){cur.status='erreur';cur.errMsg="Claude n'a pas reconnu de justificatif sur cette photo.";cur.pendingClaude=false}
+  else if(r){applyReading(cur,r);cur.pendingClaude=!!r.pendingClaude}
+  else{cur.status='erreur';cur.errMsg=(err&&err.msg||'La lecture a échoué.')+' Vous pouvez relancer « Relire le ticket » ou saisir à la main.';cur.pendingClaude=!!(err&&err.kind==='retry')}
+  await dbPut('lines',cur);refresh(cur);
+}
+// au retour du réseau : relecture par Claude des tickets lus hors ligne
+let relayRunning=false;
+async function relirePendants(){
+  if(relayRunning||!S.apiKey||!navigator.onLine)return;relayRunning=true;
+  try{for(const l of L.filter(x=>x.pendingClaude&&x.photo&&x.status!=='analyse')){
+    const b=await dbGet('photos',l.id);if(!b)continue;
+    try{const r=await readWithClaude(b);const cur=L.find(x=>x.id===l.id);if(!cur)continue;
+      if(!r.erreur)applyReading(cur,r);cur.pendingClaude=false;await dbPut('lines',cur);refresh(cur)}
+    catch(e){if(e.kind!=='retry'){const cur=L.find(x=>x.id===l.id);if(cur){cur.pendingClaude=e.kind==='offline';await dbPut('lines',cur)}}break}
+  }}finally{relayRunning=false}
+}
+window.addEventListener('online',()=>{relirePendants();renderNet()});
+window.addEventListener('offline',renderNet);
+function refresh(l){render();if(edId===l.id)fillEditor(l,true)}
+
+/* ---------- éditeur ---------- */
+let edId=null,edDraft=null;
+function openEditor(id){
+  const l=L.find(x=>x.id===id);if(!l)return;
+  edId=id;edDraft=JSON.parse(JSON.stringify(l));
+  fillEditor(l);$('ed').hidden=false;$('ed').scrollTop=0;document.body.style.overflow='hidden';
+}
+function closeEditor(){edId=null;edDraft=null;$('ed').hidden=true;document.body.style.overflow='';resetDel()}
+function fillEditor(l,fromAnalyse){
+  // après lecture : on ne remplace que ce que l'utilisateur n'a pas déjà touché dans l'éditeur
+  if(fromAnalyse&&edDraft){
+    for(const k of ['date','libelle','lieu','cat','montant','projet','status','errMsg','confiance','photo','w','h'])if(!edDraft.touched[k])edDraft[k]=l[k];
+    if(!edDraft.touched.montant)for(const k of ['devise','montantOrig','converti'])edDraft[k]=l[k];
+    if(!edDraft.touched.projet&&edDraft.projAuto)edDraft.projet=defaultProject(edDraft.date);
+  }
+  else edDraft=edDraft&&edDraft.id===l.id&&!fromAnalyse?Object.assign(edDraft,{photo:l.photo,w:l.w,h:l.h,status:l.status}):JSON.parse(JSON.stringify(l));
+  const d=edDraft;
+  $('ed-title').textContent=d.photo?'Ticket':'Ligne sans ticket';
+  $('ed-photo').hidden=!d.photo;if(d.photo&&thumbs.get(d.id))$('ed-img').src=thumbs.get(d.id);
+  $('ed-reread').hidden=!d.photo;$('ed-shot').textContent=d.photo?'Reprendre la photo':'Photo du ticket';
+  const st=$('ed-status');st.hidden=false;st.className='status';
+  if(d.status==='analyse')st.innerHTML='<i class="spin"></i> Lecture du ticket…';
+  else if(d.status==='erreur'){st.className='msg bad';st.textContent=d.errMsg||'La lecture a échoué.'}
+  else if(d.status==='ok'&&d.source==='local'){st.className='msg warn';st.textContent='Lu sur le téléphone, sans réseau : vérifiez la date et le montant.'+(d.pendingClaude?' Le ticket sera relu par Claude au retour du réseau (vos corrections sont gardées).':'')}
+  else if(d.status==='ok'){st.innerHTML='';const s=document.createElement('span');s.textContent='Lu par Claude'+(d.confiance&&d.confiance!=='haute'?' (confiance '+d.confiance+') — vérifiez les montants':' — vérifiez avant d\'enregistrer');st.append(s)}
+  else st.hidden=true;
+  const seg=$('ed-cat');seg.innerHTML='';
+  for(const c of CATS){const b=document.createElement('button');b.type='button';b.textContent=c.lab;b.setAttribute('aria-pressed',d.cat===c.k);
+    b.onclick=()=>{edDraft.cat=c.k;edDraft.touched.cat=true;fillEditor(L.find(x=>x.id===edId)||edDraft)};seg.append(b)}
+  $('ed-date').value=d.date||'';
+  const km=d.cat==='km';
+  $('ed-amt-l').textContent=km?'Distance (km)':'Montant TTC (€)';
+  $('ed-amt').value=km?(d.km??''):numStr(d.montant);
+  $('ed-amt').inputMode=km?'numeric':'decimal';
+  const cur=$('ed-cur');
+  if(!km&&d.devise&&d.devise!=='EUR'&&!d.converti){cur.hidden=false;cur.textContent=`Ticket en ${d.devise}${d.montantOrig!=null?' ('+numStr(d.montantOrig)+' '+d.devise+')':''} : saisissez le montant en euros (relevé bancaire), le libellé gardera le montant d'origine.`}
+  else cur.hidden=true;
+  $('ed-lib').value=d.libelle||'';$('ed-lieu').value=d.lieu||'';
+  fillProjSelect($('ed-proj'),d.projet,'— sans projet —');
+  const dp=defaultProject(d.date);
+  $('ed-proj-hint').textContent=d.projet&&d.projet===dp?'Projet par défaut'+(S.mission.code===dp&&S.mission.code!==S.hab?' (mission en cours à cette date)':'')+'. Modifiable.':(dp?'Projet par défaut à cette date : '+dp+'.':'Aucun projet par défaut. Réglez-le dans l\'onglet Projets.');
+}
+$('ed-date').onchange=e=>{edDraft.date=e.target.value;edDraft.touched.date=true;if(!edDraft.touched.projet&&edDraft.projAuto){edDraft.projet=defaultProject(edDraft.date)}fillEditor(edDraft)};
+$('ed-amt').oninput=e=>{edDraft.touched.montant=true;if(edDraft.cat==='km'){edDraft.km=parseInt(e.target.value,10)||null}else{edDraft.montant=parseNum(e.target.value);if(edDraft.devise!=='EUR')edDraft.converti=true}};
+$('ed-lib').oninput=e=>{edDraft.libelle=e.target.value;edDraft.touched.libelle=true};
+$('ed-lieu').oninput=e=>{edDraft.lieu=e.target.value;edDraft.touched.lieu=true};
+$('ed-proj').onchange=e=>{edDraft.projet=e.target.value;edDraft.touched.projet=true;edDraft.projAuto=false;fillEditor(edDraft)};
+$('ed-img').onclick=()=>$('ed-photo').classList.toggle('big');
+$('ed-shot').onclick=()=>{pendingTarget=edId;$('cam').click()};
+$('ed-pick').onclick=()=>{pendingTarget=edId;$('gal').click()};
+$('ed-reread').onclick=async()=>{const b=await dbGet('photos',edId);if(!b)return;const l=L.find(x=>x.id===edId);
+  for(const k of ['date','libelle','lieu','cat','montant'])edDraft.touched[k]=false;l.touched={};l.status='analyse';edDraft.status='analyse';await dbPut('lines',l);fillEditor(edDraft);render();analyse(l.id,b)};
+$('ed-close').onclick=()=>{const l=L.find(x=>x.id===edId);
+  // une ligne neuve jamais enregistrée et vide est retirée
+  if(l&&!l.saved&&!l.photo){L=L.filter(x=>x!==l);dbDel('lines',l.id)}
+  closeEditor();render()};
+$('ed-save').onclick=async()=>{
+  const d=edDraft;const l=L.find(x=>x.id===edId);if(!l)return closeEditor();
+  if(d.cat==='km'){d.montant=null}else{d.km=null}
+  if(d.devise&&d.devise!=='EUR'&&d.converti&&d.montantOrig!=null&&d.libelle&&!d.libelle.includes(d.devise))d.libelle=(d.libelle+' ('+numStr(d.montantOrig)+' '+d.devise+')').slice(0,60);
+  const keep={status:l.status}; // une lecture en cours continue
+  Object.assign(l,d,{touched:Object.assign({},l.touched,d.touched),saved:true},l.status==='analyse'?keep:{});
+  await dbPut('lines',l);closeEditor();render();toast('Ligne enregistrée');
+};
+function resetDel(){const b=$('ed-del');b.classList.remove('armed');b.textContent='Supprimer la ligne'}
+$('ed-del').onclick=async()=>{const b=$('ed-del');
+  if(!b.classList.contains('armed')){b.classList.add('armed');b.textContent='Confirmer : la ligne et sa photo seront effacées';return}
+  const id=edId;L=L.filter(x=>x.id!==id);await dbDel('lines',id);await dbDel('photos',id);
+  if(thumbs.get(id)){URL.revokeObjectURL(thumbs.get(id));thumbs.delete(id)}closeEditor();render();toast('Ligne supprimée')};
+$('add-manual').onclick=()=>{
+  const l={id:uid(),created:new Date().toISOString(),date:todayISO(),libelle:'',lieu:'',cat:'km',montant:null,km:null,projet:defaultProject(todayISO()),
+    photo:false,w:0,h:0,devise:'EUR',converti:true,touched:{},status:'',projAuto:true};
+  L.push(l);openEditor(l.id);
+};
+
+/* ---------- toast ---------- */
+let toastT;function toast(t){const e=$('toast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>e.hidden=true,2800)}
+
+/* ---------- génération Excel à partir du modèle ---------- */
+const xmlEsc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'');
+const serial=iso=>{const [y,m,d]=iso.split('-').map(Number);return (Date.UTC(y,m-1,d)-Date.UTC(1899,11,30))/86400000};
+function setCell(x,ref,val){
+  const re=new RegExp('<c r="'+ref+'"([^>]*?)(/>|>[\\s\\S]*?</c>)');
+  if(!re.test(x))throw new Error('Cellule '+ref+' absente du modèle');
+  return x.replace(re,(m,attrs)=>{const s=(attrs.match(/ s="\d+"/)||[''])[0];
+    if(typeof val==='number')return `<c r="${ref}"${s}><v>${val}</v></c>`;
+    return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(val)}</t></is></c>`});
+}
+function setCached(x,ref,val){ // valeur pré-calculée d'une cellule formule (pour les visionneuses qui ne recalculent pas)
+  const re=new RegExp('(<c r="'+ref+'"[^>]*?)(?: t="str")?>(<f[^>]*?(?:/>|>[^<]*</f>))(?:<v>[^<]*</v>|<v/>)</c>');
+  return x.replace(re,(m,head,f)=>typeof val==='number'?`${head}>${f}<v>${Math.round(val*100)/100}</v></c>`:`${head} t="str">${f}<v></v></c>`);
+}
+function b64ToBytes(b){const s=atob(b);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u}
+
+async function buildWorkbook(ctx){
+  // ctx: {nom, month:'YYYY-MM', lines:[{date,libelle,lieu,cat,montant,km,projet,justif,photoBlob,w,h}], ach,ret,ava,obs}
+  const zip=await JSZip.loadAsync(await templateBytes());
+  const put=(p,d)=>zip.file(p,d,{createFolders:false});
+  let sh=await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const r1=sh.match(/<c r="H5"[^>]*><v>([\d.]+)<\/v>/),r2=sh.match(/<c r="H6"[^>]*><v>([\d.]+)<\/v>/);
+  const k1=r1?Number(r1[1]):0.5,k2=r2?Number(r2[1]):0.35;
+  const kmA=km=>!km?0:(km<=200?km*k1:200*k1+(km-200)*k2);
+  sh=setCell(sh,'F3',ctx.nom||'');
+  sh=setCell(sh,'M3',serial(ctx.month+'-01'));
+  const tot={G:0,H:0,I:0,J:0,K:0,L:0,M:0,N:0};
+  for(let i=0;i<MAX_LINES;i++){
+    const r=8+i,l=ctx.lines[i];
+    let h='',n=0;
+    if(l){
+      sh=setCell(sh,'B'+r,l.libelle||'');
+      if(l.lieu)sh=setCell(sh,'C'+r,l.lieu);
+      if(l.date)sh=setCell(sh,'D'+r,serial(l.date));
+      if(l.justif)sh=setCell(sh,'E'+r,l.justif);
+      if(l.projet)sh=setCell(sh,'F'+r,l.projet);
+      if(l.cat==='km'){if(l.km){sh=setCell(sh,'G'+r,l.km);tot.G+=l.km;h=kmA(l.km);tot.H+=h;n+=h}}
+      else if(l.montant!=null){const c=CAT[l.cat].col;sh=setCell(sh,c+r,l.montant);tot[c]+=l.montant;n+=l.montant}
+    }
+    sh=setCached(sh,'H'+r,h===''?'':h);
+    sh=setCached(sh,'N'+r,(r===8)?n:(n===0?'':n));
+    tot.N+=n;
+  }
+  for(const c of 'GHIJKLMN')sh=setCached(sh,c+'58',tot[c]);
+  const ach=parseNum(ctx.ach),ret=parseNum(ctx.ret),ava=parseNum(ctx.ava);
+  if(ach!=null)sh=setCell(sh,'Q8',ach);if(ret!=null)sh=setCell(sh,'Q9',ret);if(ava!=null)sh=setCell(sh,'Q10',ava);
+  if(ctx.obs)sh=setCell(sh,'P17',ctx.obs);
+  sh=setCached(sh,'Q7',tot.N);sh=setCached(sh,'Q11',tot.N+(ach||0)-(ret||0)-(ava||0));
+  put('xl/worksheets/sheet1.xml',sh);
+
+  // modèle .xltx -> classeur .xlsx, recalcul à l'ouverture
+  let ct=await zip.file('[Content_Types].xml').async('string');
+  ct=ct.replace('spreadsheetml.template.main+xml','spreadsheetml.sheet.main+xml');
+  let wb=await zip.file('xl/workbook.xml').async('string');
+  wb=wb.replace(/<mc:AlternateContent[\s\S]*?<\/mc:AlternateContent>/,'').replace(/<calcPr([^>]*?)\/>/,(m,a)=>`<calcPr${a.replace(/ fullCalcOnLoad="\d"/,'')} fullCalcOnLoad="1"/>`);
+
+  const pics=ctx.lines.filter(l=>l.justif&&l.photoBlob);
+  if(pics.length){
+    const EMU=12700,ROWPT=15,MAXW=12*360000,MAXH=17*360000;
+    let rows='',anchors='',rels='',row=0;
+    for(let i=0;i<pics.length;i++){
+      const p=pics[i],name='justif'+p.justif+'.jpeg';
+      put('xl/media/'+name,await p.photoBlob.arrayBuffer());
+      const label=`Justificatif n°${p.justif} — ${p.date?p.date.split('-').reverse().join('/'):'date ?'} — ${p.libelle||''} — ${p.cat==='km'?(p.km||0)+' km':fmtEur(p.montant)}${p.projet?' — '+p.projet:''}`;
+      rows+=`<row r="${row+1}"><c r="A${row+1}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(label)}</t></is></c></row>`;
+      let w=p.w||1000,h=p.h||1400;const k=Math.min(MAXW/(w*9525),MAXH/(h*9525));const cx=Math.round(w*9525*k),cy=Math.round(h*9525*k);
+      anchors+=`<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row+1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i+2}" name="Justificatif ${p.justif}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId${i+1}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
+      rels+=`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${name}"/>`;
+      row+=1+Math.ceil(cy/EMU/ROWPT)+2;
+    }
+    put('xl/worksheets/sheet2.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15" customHeight="1"/><cols><col min="1" max="1" width="100" customWidth="1"/></cols><sheetData>${rows}</sheetData><pageMargins left="0.5" right="0.5" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="portrait"/><drawing r:id="rId1"/></worksheet>`);
+    put('xl/worksheets/_rels/sheet2.xml.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/></Relationships>`);
+    put('xl/drawings/drawing2.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${anchors}</xdr:wsDr>`);
+    put('xl/drawings/_rels/drawing2.xml.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`);
+    ct=ct.replace('<Default Extension="png"','<Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png"')
+         .replace('</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+    wb=wb.replace('</sheets>','<sheet name="Justificatifs" sheetId="2" r:id="rId9"/></sheets>');
+    let wr=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    wr=wr.replace('</Relationships>','<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
+    put('xl/_rels/workbook.xml.rels',wr);
+    let app=await zip.file('docProps/app.xml').async('string');
+    app=app.replace('<vt:i4>1</vt:i4>','<vt:i4>2</vt:i4>').replace('<vt:vector size="1" baseType="lpstr"><vt:lpstr>Feuil1</vt:lpstr>','<vt:vector size="2" baseType="lpstr"><vt:lpstr>Feuil1</vt:lpstr><vt:lpstr>Justificatifs</vt:lpstr>');
+    put('docProps/app.xml',app);
+  }
+  put('[Content_Types].xml',ct);put('xl/workbook.xml',wb);
+  return zip.generateAsync({type:'blob',compression:'DEFLATE',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+window.__buildWorkbook=buildWorkbook; // utilisé pour les essais
+
+async function exportCtx(){
+  const ls=monthLines();const js=justifNumbers(ls);const out=[];
+  for(const l of ls){out.push(Object.assign({},l,{justif:js.get(l.id)||null,photoBlob:l.photo?await dbGet('photos',l.id):null}))}
+  return {nom:S.nom,month,lines:out,ach:note.ach,ret:note.ret,ava:note.ava,obs:note.obs};
+}
+function baseName(){return month+' NdF'+(S.tri?' '+S.tri:'')}
+function xmsg(t,cls){const m=$('x-msg');m.hidden=!t;m.className='msg'+(cls?' '+cls:'');m.textContent=t||''}
+const MIME={xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',zip:'application/zip',json:'application/json'};
+const asFile=(name,blob)=>new File([blob],name,{type:MIME[name.split('.').pop()]||'application/octet-stream'});
+function downloadBlob(name,blob){
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},4000);
+}
+async function saveFile(filename,blob){
+  try{downloadBlob(filename,blob);xmsg(filename+' enregistré dans les téléchargements du téléphone.');return true}
+  catch(e){xmsg("L'enregistrement a échoué : "+(e.message||e),'bad');return false}
+}
+$('x-xlsx').onclick=async()=>{
+  const b=$('x-xlsx');const ls=monthLines();
+  if(!ls.length){xmsg('Aucune ligne ce mois-ci.','warn');return}
+  if(ls.some(l=>l.status==='analyse')){xmsg('Une lecture de ticket est encore en cours. Réessayez dans quelques secondes.','warn');return}
+  const warn=[];if(ls.length>MAX_LINES)warn.push(`${ls.length} lignes : le modèle n'en contient que 50, les suivantes ne sont pas exportées.`);
+  const np=ls.filter(l=>!l.projet).length;if(np)warn.push(`${np} ligne(s) sans projet.`);
+  const nc=ls.filter(l=>l.devise&&l.devise!=='EUR'&&!l.converti).length;if(nc)warn.push(`${nc} montant(s) en devise étrangère non converti(s).`);
+  if(!S.nom)warn.push('NOM Prénom non renseigné.');
+  b.disabled=true;b.textContent='Génération…';
+  try{const ctx=await exportCtx();ctx.lines=ctx.lines.slice(0,MAX_LINES);const blob=await buildWorkbook(ctx);
+    const ok=await saveFile(baseName()+'.xlsx',blob);if(ok&&warn.length)xmsg($('x-msg').textContent+' À vérifier : '+warn.join(' '),'warn')}
+  catch(e){xmsg('Génération impossible : '+(e.message||e),'bad')}
+  finally{b.disabled=false;b.textContent="Enregistrer l'Excel"}
+};
+function addPhotos(folder,pics){
+  for(const p of pics){const nm=`J${pad(p.justif)} ${p.date||'sans-date'} ${(CAT[p.cat]||{lab:''}).lab} ${(p.libelle||'').replace(/[\\/:*?"<>|]/g,'-')}`.trim().slice(0,90);folder.file(nm+'.jpg',p.photoBlob)}
+}
+$('x-zip').onclick=async()=>{
+  const ctx=await exportCtx();const pics=ctx.lines.filter(l=>l.photoBlob);
+  if(!pics.length){xmsg('Aucune photo ce mois-ci.','warn');return}
+  const z=new JSZip();addPhotos(z,pics);
+  const blob=await z.generateAsync({type:'blob'});await saveFile(baseName()+' justificatifs.zip',blob);
+};
+
+/* ---------- envoi à la comptabilité ---------- */
+const EMAIL_RE=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+$('s-mcpt').onchange=async e=>{S.mailCpt=e.target.value.trim();await saveSettings()};
+$('s-mdg').onchange=async e=>{S.mailDg=e.target.value.trim();await saveSettings()};
+function mmsg(t,cls){const m=$('m-msg');m.hidden=!t;m.className='msg'+(cls?' '+cls:'');m.textContent=t||''}
+function mailParts(ls){
+  const tot=ls.reduce((s,l)=>s+lineAmount(l),0);
+  const net=tot+(parseNum(note.ach)||0)-(parseNum(note.ret)||0)-(parseNum(note.ava)||0);
+  const mois=monthLabel(month);const nj=ls.filter(l=>l.photo).length;
+  const projets=[...new Set(ls.map(l=>l.projet).filter(Boolean))];
+  const to=[S.mailCpt,S.mailDg].filter(Boolean);
+  const subject=`Note de frais ${mois}${S.nom?' – '+S.nom:''}`;
+  const body=`Bonjour,
+
+Veuillez trouver ci-joint ma note de frais de ${mois}.
+
+– ${ls.length} ligne(s), ${nj} justificatif(s)
+– Total : ${fmtEur(tot)}
+– Montant net à régler : ${fmtEur(net)}${projets.length?'\n– Projets : '+projets.join(', '):''}
+
+En pièces jointes : l'Excel (avec un onglet Justificatifs) et les copies des tickets et factures, numérotées comme la colonne « Justif n° ».
+
+Cordialement,
+${S.nom||''}`;
+  return {to,subject,body};
+}
+$('m-send').onclick=async()=>{
+  const b=$('m-send');const ls=monthLines();
+  if(!ls.length){mmsg('Aucune ligne ce mois-ci.','warn');return}
+  if(ls.some(l=>l.status==='analyse')){mmsg('Une lecture de ticket est encore en cours. Réessayez dans quelques secondes.','warn');return}
+  const bad=[S.mailCpt,S.mailDg].filter(m=>m&&!EMAIL_RE.test(m));
+  if(!S.mailCpt&&!S.mailDg){mmsg('Renseignez au moins une adresse (comptable ou DG).','warn');$('s-mcpt').focus();return}
+  if(bad.length){mmsg('Adresse invalide : '+bad.join(', '),'warn');return}
+  const warn=[];if(ls.length>MAX_LINES)warn.push(`seules les 50 premières lignes sont dans l'Excel`);
+  const np=ls.filter(l=>!l.projet).length;if(np)warn.push(`${np} ligne(s) sans projet`);
+  const nc=ls.filter(l=>l.devise&&l.devise!=='EUR'&&!l.converti).length;if(nc)warn.push(`${nc} montant(s) en devise non converti(s)`);
+  b.disabled=true;b.textContent='Préparation…';
+  try{
+    const ctx=await exportCtx();const pics=ctx.lines.filter(l=>l.photoBlob);
+    const xctx=Object.assign({},ctx,{lines:ctx.lines.slice(0,MAX_LINES)});
+    const xlsx=await buildWorkbook(xctx);
+    let zip=null;
+    if(pics.length){const z=new JSZip();addPhotos(z,pics);zip=await z.generateAsync({type:'blob'})}
+    packs={xlsx,zip,warn,names:{xlsx:baseName()+'.xlsx',zip:baseName()+' justificatifs.zip'},done:{}};
+    $('m-sx').textContent="Enregistrer l'Excel";$('m-sz').textContent='Enregistrer les justificatifs (.zip)';
+    const {to,subject,body}=mailParts(ls);
+    $('m-to').value=to.join('; ');$('m-sub').value=subject;
+    $('m-body').value=zip?body:body.replace(" et les copies des tickets et factures, numérotées comme la colonne « Justif n° »","");
+    $('m-mailto').href='mailto:'+to.map(encodeURIComponent).join(',')+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent($('m-body').value);
+    $('m-sz').hidden=!zip;$('m-steps').hidden=false;
+    packs.files=[asFile(packs.names.xlsx,xlsx)].concat(zip?[asFile(packs.names.zip,zip)]:[]);
+    packs.subject=subject;packs.body=$('m-body').value;
+    const canShare=!!(navigator.canShare&&navigator.canShare({files:packs.files}));
+    $('m-share').hidden=!canShare;
+    note.prep=new Date().toISOString();await saveNote();
+    mmsg(canShare?`Prêt : ${packs.files.length} pièce(s) jointe(s). Touchez « Envoyer par mail », choisissez Outlook, puis collez les destinataires.${warn.length?' À vérifier : '+warn.join(', ')+'.':''}`
+      :`Prêt. Ce navigateur ne sait pas partager des fichiers : enregistrez les deux fichiers, ouvrez le brouillon et joignez-les.${warn.length?' À vérifier : '+warn.join(', ')+'.':''}`,warn.length?'warn':'');
+  }catch(e){mmsg('Préparation impossible : '+(e.message||e),'bad')}
+  finally{b.disabled=false;b.textContent="Préparer l'envoi"}
+};
+let packs=null;
+// le partage doit partir directement du toucher : les fichiers sont donc préparés avant
+$('m-share').onclick=async()=>{
+  if(!packs)return;
+  try{
+    try{await navigator.clipboard.writeText($('m-to').value)}catch(e){}
+    await navigator.share({files:packs.files,title:packs.subject,text:packs.body});
+    mmsg('Mail préparé dans votre messagerie. Les destinataires sont copiés : collez-les dans « À ».');
+  }catch(e){if(e&&e.name==='AbortError')mmsg('Partage annulé.','warn');else mmsg('Le partage a échoué ('+(e&&e.message||e)+'). Utilisez les boutons Enregistrer.','warn')}
+};
+$('m-sx').onclick=()=>{if(packs){downloadBlob(packs.names.xlsx,packs.xlsx);$('m-sx').textContent='Excel enregistré ✓'}};
+$('m-sz').onclick=()=>{if(packs&&packs.zip){downloadBlob(packs.names.zip,packs.zip);$('m-sz').textContent='Justificatifs enregistrés ✓'}};
+function copyBtn(btnId,srcId,label){
+  $(btnId).onclick=()=>{const src=$(srcId);const done=()=>{$(btnId).textContent='Copié ✓';setTimeout(()=>$(btnId).textContent=label,1600)};
+    try{navigator.clipboard.writeText(src.value).then(done,()=>{src.focus();src.select();toast('Texte sélectionné : copiez-le')})}
+    catch(e){src.focus();src.select();toast('Texte sélectionné : copiez-le')}};
+}
+copyBtn('m-cto','m-to','Copier les destinataires');copyBtn('m-csub','m-sub','Copier l\'objet');copyBtn('m-cbody','m-body','Copier le message');
+
+/* ---------- réglages de lecture ---------- */
+function renderReading(){
+  $('s-key').value=S.apiKey||'';
+  const sel=$('s-model');sel.innerHTML='';
+  for(const [id,lab] of Object.entries(MODELS)){const o=document.createElement('option');o.value=id;o.textContent=lab;sel.append(o)}
+  sel.value=S.model||'claude-opus-5-5';
+}
+function renderNet(){
+  const e=$('s-net');if(!e)return;
+  const n=L.filter(l=>l.pendingClaude).length;
+  e.textContent=(navigator.onLine?'En ligne':'Hors ligne')+' · '+(S.apiKey?'lecture par Claude':'lecture sur le téléphone (pas de clé)')+(n?` · ${n} ticket(s) à relire par Claude`:'');
+}
+$('s-key').onchange=async e=>{S.apiKey=e.target.value.trim();await saveSettings();renderNet();relirePendants()};
+$('s-model').onchange=async e=>{S.model=e.target.value;await saveSettings()};
+$('s-key-del').onclick=async()=>{S.apiKey='';$('s-key').value='';await saveSettings();renderNet();toast('Clé effacée de ce téléphone')};
+$('s-key-test').onclick=async()=>{
+  const b=$('s-key-test');if(!S.apiKey){toast('Saisissez d\'abord une clé');return}
+  if(!navigator.onLine){toast('Pas de réseau');return}
+  b.disabled=true;b.textContent='Test…';
+  try{const {client}=await claudeClient();await client.models.retrieve(S.model||'claude-opus-5-5');toast('Clé valide');}
+  catch(e){toast(e&&e.status===401?'Clé refusée':e&&e.status===403?'Clé sans accès à ce modèle':'Test impossible : '+(e&&e.message||e).toString().slice(0,80))}
+  finally{b.disabled=false;b.textContent='Tester la clé'}
+};
+
+/* ---------- sauvegarde / restauration ---------- */
+async function dbKeys(store){const r=await op(store,'readonly',s=>s.getAllKeys());return useMem?[...mem[store].keys()]:(r||[])}
+function bmsg(t,cls){const m=$('b-msg');m.hidden=!t;m.className='msg'+(cls?' '+cls:'');m.textContent=t||''}
+$('b-save').onclick=async()=>{
+  const z=new JSZip();const notes={};
+  for(const k of await dbKeys('kv'))if(String(k).startsWith('note:'))notes[k]=await dbGet('kv',k);
+  const settings=Object.assign({},S);delete settings.apiKey;
+  const lines=await dbAll('lines');
+  z.file('donnees.json',JSON.stringify({app:'notes-de-frais',version:1,date:new Date().toISOString(),settings,notes,lines},null,1));
+  for(const l of lines)if(l.photo){const b=await dbGet('photos',l.id);if(b)z.file('photos/'+l.id+'.jpg',b)}
+  const blob=await z.generateAsync({type:'blob'});
+  downloadBlob('Sauvegarde notes de frais '+todayISO()+'.zip',blob);bmsg(`Sauvegarde enregistrée : ${lines.length} ligne(s).`);
+};
+$('b-load').onclick=()=>$('b-file').click();
+$('b-file').onchange=async e=>{
+  const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+  try{
+    const z=await JSZip.loadAsync(f);const j=z.file('donnees.json');if(!j)throw new Error("ce fichier n'est pas une sauvegarde de l'appli");
+    const d=JSON.parse(await j.async('string'));if(d.app!=='notes-de-frais')throw new Error("ce fichier n'est pas une sauvegarde de l'appli");
+    // fusion : les projets s'ajoutent, les lignes de même identifiant sont remplacées, la clé API actuelle est gardée
+    const s=d.settings||{};const codes=new Set(S.projets.map(p=>p.code));
+    for(const p of s.projets||[])if(!codes.has(p.code))S.projets.push(p);
+    for(const k of ['nom','tri','hab','mailCpt','mailDg','model'])if(!S[k]&&s[k])S[k]=s[k];
+    if(!S.mission.code&&s.mission)S.mission=s.mission;
+    await saveSettings();
+    for(const [k,v] of Object.entries(d.notes||{}))await dbPut('kv',v,k);
+    let n=0;
+    for(const l of d.lines||[]){const ph=z.file('photos/'+l.id+'.jpg');
+      if(ph){const b=new Blob([await ph.async('uint8array')],{type:'image/jpeg'});await dbPut('photos',b,l.id);if(thumbs.get(l.id))URL.revokeObjectURL(thumbs.get(l.id));thumbs.set(l.id,URL.createObjectURL(b))}
+      if(l.status==='analyse')l.status='ok';await dbPut('lines',l);const i=L.findIndex(x=>x.id===l.id);if(i>=0)L[i]=l;else L.push(l);n++}
+    await loadNote();render();renderExport();renderNet();bmsg(`${n} ligne(s) restaurée(s).`);
+  }catch(err){bmsg('Restauration impossible : '+(err.message||err),'bad')}
+};
+
+/* ---------- installation ---------- */
+let deferredInstall=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;installHint()});
+function installHint(){
+  const box=$('install');if(!box)return;
+  const standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+  if(standalone){box.hidden=true;return}
+  const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  box.hidden=false;box.innerHTML='';
+  const t=document.createElement('span');
+  if(deferredInstall){t.textContent='Installez l\'appli pour l\'utiliser hors ligne. ';const b=document.createElement('button');b.className='btn';b.textContent='Installer';
+    b.onclick=async()=>{deferredInstall.prompt();await deferredInstall.userChoice.catch(()=>{});deferredInstall=null;installHint()};box.append(t,b)}
+  else{t.textContent=ios?'Pour l\'utiliser hors ligne : bouton Partager de Safari → « Sur l\'écran d\'accueil ».':'Pour l\'utiliser hors ligne : menu du navigateur → « Installer l\'application » ou « Ajouter à l\'écran d\'accueil ».';box.append(t)}
+}
+
+/* ---------- démarrage ---------- */
+(async function init(){
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})}catch(e){}
+  try{const s=await dbGet('kv','settings');if(s)S=Object.assign(S,s);S.mission=Object.assign({code:'',du:'',au:''},S.mission||{})}catch(e){}
+  try{L=await dbAll('lines')}catch(e){L=[]}
+  for(const l of L){if(l.photo){try{const b=await dbGet('photos',l.id);if(b)thumbs.set(l.id,URL.createObjectURL(b))}catch(e){}}
+    if(l.status==='analyse'){l.status='erreur';l.errMsg='La lecture a été interrompue. Touchez « Relire le ticket ».'}}
+  // lignes jamais enregistrées sans photo : retirées
+  L=L.filter(l=>l.saved||l.photo);
+  await loadNote();render();renderExport();renderNet();
+  $('app-ver').textContent='Version '+APP_VERSION+(window.matchMedia('(display-mode: standalone)').matches||navigator.standalone?' · installée':'');
+  if('serviceWorker' in navigator){try{await navigator.serviceWorker.register('sw.js')}catch(e){}}
+  installHint();
+  relirePendants();
+})();
+</script>
+</body>
+</html>
