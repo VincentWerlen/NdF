@@ -187,6 +187,7 @@ a.btn{text-decoration:none;color:inherit}
         <div class="field"><label for="s-nom">NOM Prénom</label><input id="s-nom" autocomplete="name"></div>
         <div class="field"><label for="s-tri">Trigramme (nom du fichier)</label><input id="s-tri" maxlength="6" autocomplete="off"></div>
       </div>
+      <p class="hint" id="s-nom-hint">Modifiable à tout moment ; retenu sur ce téléphone pour les prochains exports.</p>
     </div>
     <div class="card">
       <h2>Cadre de droite</h2>
@@ -301,7 +302,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="vendor/tesseract/tesseract.min.js"></script>
 <script>
 "use strict";
-const APP_VERSION='1.0.1';
+const APP_VERSION='1.0.2';
 // modèle Excel FI407/A, servi à côté de la page et gardé en cache pour le hors-ligne
 let tplP=null;
 function templateBytes(){
@@ -490,8 +491,17 @@ $('d-mis').onchange=misChange;$('d-du').onchange=misChange;$('d-au').onchange=mi
 $('d-mis-clear').onclick=async()=>{S.mission={code:'',du:'',au:''};await saveSettings();renderProjects();render();toast('Mission terminée : retour au projet habituel')};
 
 /* ---------- export : champs ---------- */
-$('s-nom').onchange=async e=>{S.nom=e.target.value.trim();if(!S.tri)S.tri=trigramme(S.nom);$('s-tri').value=S.tri;await saveSettings()};
-$('s-tri').onchange=async e=>{S.tri=e.target.value.trim();await saveSettings()};
+// enregistrement à chaque frappe (et à la fermeture), pour ne rien perdre si l'appli est quittée sans valider le champ
+let nomT=null;
+function benefChanged(){
+  S.nom=$('s-nom').value.trim();
+  if(!S.triManual){S.tri=trigramme(S.nom);$('s-tri').value=S.tri}  // le trigramme suit le nom tant qu'il n'a pas été saisi à la main
+  clearTimeout(nomT);nomT=setTimeout(async()=>{await saveSettings();$('s-nom-hint').textContent='Enregistré : '+(S.nom||'(vide)')+'. Retenu pour les prochains exports.'},300);
+}
+$('s-nom').oninput=benefChanged;$('s-nom').onchange=benefChanged;
+$('s-tri').oninput=()=>{S.tri=$('s-tri').value.trim();S.triManual=!!S.tri;clearTimeout(nomT);nomT=setTimeout(saveSettings,300)};
+window.addEventListener('pagehide',()=>{clearTimeout(nomT);saveSettings()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){clearTimeout(nomT);saveSettings()}});
 for(const [id,k] of [['n-ach','ach'],['n-ret','ret'],['n-ava','ava'],['n-obs','obs']])
   $(id).oninput=e=>{note[k]=e.target.value;updNet();clearTimeout($(id)._t);$(id)._t=setTimeout(saveNote,400)};
 function trigramme(nom){ // NOM Prénom -> initiale prénom + initiale nom + dernière lettre du nom

@@ -1,6 +1,6 @@
 // Hors ligne : tout le nécessaire est mis en cache à l'installation, puis servi depuis le cache.
 // Changer VERSION à chaque mise à jour publiée pour que les téléphones récupèrent la nouvelle version.
-const VERSION = 'ndf-1.0.1';
+const VERSION = 'ndf-1.0.2';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'modele-ndf.xltx',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png',
